@@ -45,7 +45,7 @@ docker run -d \
   -v $(pwd)/manga:/manga \
   -v $(pwd)/data:/data \
   --name mangashelf \
-  your-dockerhub-lammy93/mangashelf
+  lammy93/mangashelf
 ```
 
 Then open:

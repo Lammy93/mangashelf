@@ -78,6 +78,25 @@ def get_db():
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
+def migrate_db(db):
+    """Add missing columns to existing tables (safe to run on old DBs)."""
+    migrations = [
+        ("chapters", "volume_id", "TEXT"),
+        ("chapters", "release_date", "TEXT"),
+        ("manga", "cover_source", "TEXT"),
+        ("manga", "description", "TEXT"),
+        ("manga", "author", "TEXT"),
+        ("manga", "genres", "TEXT"),
+        ("manga", "total_volumes", "INTEGER DEFAULT 0"),
+        ("manga", "release_date", "TEXT"),
+    ]
+    for table, col, col_type in migrations:
+        try:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass
+    db.commit()
+
 def init_db():
     with get_db() as db:
         db.executescript("""
@@ -177,6 +196,9 @@ def init_db():
             db.commit()
 
 init_db()
+db = get_db()
+migrate_db(db)
+db.close()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 

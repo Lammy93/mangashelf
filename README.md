@@ -39,24 +39,22 @@ MangaShelf is a lightweight, self-hosted solution for reading and managing manga
 
 Run MangaShelf instantly:
 
-</> bash
+``` bash
 docker run -d \
   -p 8080:8080 \
   -v $(pwd)/manga:/manga \
   -v $(pwd)/data:/data \
   --name mangashelf \
   your-dockerhub-username/mangashelf
-
+```
 
 Then open:
 
 http://localhost:8080
 
-2. Configure volumes
+2. Edit docker-compose.yml:
 
-Edit docker-compose.yml:
-
-services:
+```services:
   mangashelf:
     build: .
     container_name: mangashelf
@@ -71,13 +69,13 @@ services:
       - /mnt/user/appdata/mangashelf/data:/data
     environment:
       - TZ=Australia/Sydney
-
+```
 
 3. Create directories
 mkdir -p manga data
 
 4. Run the application
-docker-compose up --build -d
+```docker-compose up --build -d```
 
 ## Manga Folder Structure
 manga/
@@ -87,8 +85,8 @@ manga/
   Another Manga.pdf
 
 ## Updating
-docker-compose down
-docker-compose up --build -d
+```docker-compose down```
+```docker-compose up --build -d```
 
 ## Notes
 Ensure proper permissions are set for mounted volumes

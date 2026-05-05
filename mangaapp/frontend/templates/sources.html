@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sources — MangaShelf</title>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;--radius:10px;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
+  nav{display:flex;align-items:center;justify-content:space-between;padding:0 2rem;height:60px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+  .logo{font-family:'Dela Gothic One',sans-serif;font-size:1.4rem;}.logo span{color:var(--accent);}
+  .nav-links{display:flex;gap:1.5rem;}.nav-links a{color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;transition:color .2s;}.nav-links a:hover,.nav-links a.active{color:var(--text);}
+  .page-content{padding:2rem;max-width:700px;}
+  h1{font-family:'Dela Gothic One',sans-serif;font-size:1.8rem;margin-bottom:.5rem;}
+  .subtitle{color:var(--muted);font-size:.9rem;margin-bottom:2rem;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem;}
+  .card-title{font-weight:600;font-size:.95rem;margin-bottom:.25rem;}
+  .source-row{display:flex;align-items:center;gap:.75rem;padding:.75rem;background:var(--surface2);border-radius:8px;margin-bottom:.5rem;border:1px solid var(--border);}
+  .source-icon{width:36px;height:36px;background:var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0;}
+  .source-info{flex:1;}
+  .source-name{font-weight:600;font-size:.9rem;}
+  .source-url{font-size:.75rem;color:var(--muted);margin-top:.1rem;}
+  .badge{display:inline-block;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+  .badge-builtin{background:rgba(232,64,58,.12);color:var(--accent);}
+  .badge-custom{background:rgba(255,122,53,.12);color:var(--accent2);}
+  .badge-off{background:rgba(122,122,140,.12);color:var(--muted);}
+  .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;display:inline-flex;align-items:center;gap:.3rem;}
+  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
+  .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+  .btn-danger{background:transparent;color:var(--muted);border:1px solid var(--border);}.btn-danger:hover{border-color:#c93530;color:#c93530;}
+  .add-form{display:flex;flex-direction:column;gap:.75rem;}
+  .form-row{display:flex;gap:.75rem;flex-wrap:wrap;}
+  input.field{flex:1;min-width:180px;padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;}
+  input.field:focus{border-color:var(--accent);}
+  .toggle{position:relative;width:36px;height:20px;flex-shrink:0;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;inset:0;background:var(--border);border-radius:20px;cursor:pointer;transition:.2s;}
+  .slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.2s;}
+  input:checked+.slider{background:var(--accent);}
+  input:checked+.slider:before{transform:translateX(16px);background:#fff;}
+  .section-label{font-size:.7rem;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:.75rem;}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">Manga<span>Shelf</span></div>
+  <div class="nav-links">
+    <a href="/">Library</a>
+    <a href="/search">Discover</a>
+    <a href="/sources" class="active">Sources</a>
+  </div>
+</nav>
+<div class="page-content">
+  <h1>Sources</h1>
+  <p class="subtitle">Manage where MangaShelf searches and downloads manga from.</p>
+
+  <div class="card">
+    <div class="section-label" style="margin-bottom:.75rem;">Add Custom Source</div>
+    <div class="add-form">
+      <div class="form-row">
+        <input class="field" type="text" id="new-name" placeholder="Source name (e.g. MangaFox)">
+        <input class="field" type="url" id="new-url" placeholder="Base URL (e.g. https://mangafox.com)">
+      </div>
+      <div>
+        <button class="btn btn-primary" onclick="addSource()">+ Add Source</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Configured Sources</div>
+  <div id="sources-list"></div>
+</div>
+
+<script>
+async function loadSources() {
+  const res = await fetch('/api/sources');
+  const sources = await res.json();
+  const list = document.getElementById('sources-list');
+  if (!sources.length) { list.innerHTML = '<p style="color:var(--muted);font-size:.875rem;">No sources configured.</p>'; return; }
+  list.innerHTML = sources.map(s => `
+    <div class="source-row" id="src-${s.id}">
+      <div class="source-icon">${s.type === 'mangadex' ? '🌐' : s.type === 'mangasee' ? '📚' : '🔗'}</div>
+      <div class="source-info">
+        <div class="source-name">${s.name} <span class="badge ${s.type==='custom'?'badge-custom':'badge-builtin'}">${s.type}</span> ${!s.enabled?'<span class="badge badge-off">OFF</span>':''}</div>
+        <div class="source-url">${s.base_url}</div>
+      </div>
+      <label class="toggle" title="Enable/Disable">
+        <input type="checkbox" ${s.enabled?'checked':''} onchange="toggleSource('${s.id}')">
+        <span class="slider"></span>
+      </label>
+      ${s.type==='custom'?`<button class="btn btn-danger" onclick="deleteSource('${s.id}')">✕</button>`:''}
+    </div>`).join('');
+}
+
+async function addSource() {
+  const name = document.getElementById('new-name').value.trim();
+  const url = document.getElementById('new-url').value.trim();
+  if (!name || !url) { alert('Please fill in both fields.'); return; }
+  await fetch('/api/sources', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, base_url: url})
+  });
+  document.getElementById('new-name').value = '';
+  document.getElementById('new-url').value = '';
+  loadSources();
+}
+
+async function deleteSource(id) {
+  if (!confirm('Remove this source?')) return;
+  await fetch(`/api/sources/${id}`, {method:'DELETE'});
+  loadSources();
+}
+
+async function toggleSource(id) {
+  await fetch(`/api/sources/${id}/toggle`, {method:'PATCH'});
+  loadSources();
+}
+
+loadSources();
+</script>
+</body>
+</html>

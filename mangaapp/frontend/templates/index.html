@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MangaShelf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #16161a;
+    --surface2: #1e1e24;
+    --border: #2a2a35;
+    --accent: #e8403a;
+    --accent2: #ff7a35;
+    --text: #eeeef0;
+    --muted: #7a7a8c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+
+  /* NAV */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 2rem; height: 60px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo { font-family: 'Dela Gothic One', sans-serif; font-size: 1.4rem; letter-spacing: -0.5px; }
+  .logo span { color: var(--accent); }
+  .nav-links { display: flex; gap: 1.5rem; }
+  .nav-links a { color: var(--muted); text-decoration: none; font-size: .9rem; font-weight: 500; transition: color .2s; }
+  .nav-links a:hover, .nav-links a.active { color: var(--text); }
+
+  /* HERO BAR */
+  .hero { padding: 2.5rem 2rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+  .hero h1 { font-family: 'Dela Gothic One', sans-serif; font-size: 2rem; }
+  .search-wrap { flex: 1; min-width: 240px; position: relative; }
+  .search-wrap input {
+    width: 100%; padding: .65rem 1rem .65rem 2.8rem;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; font-size: .9rem; outline: none;
+    transition: border-color .2s;
+  }
+  .search-wrap input:focus { border-color: var(--accent); }
+  .search-wrap svg { position: absolute; left: .9rem; top: 50%; transform: translateY(-50%); opacity: .4; }
+  .btn {
+    padding: .6rem 1.2rem; border-radius: 8px; border: none; cursor: pointer;
+    font-family: 'DM Sans', sans-serif; font-size: .875rem; font-weight: 600;
+    transition: all .2s; text-decoration: none; display: inline-flex; align-items: center; gap: .4rem;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #c93530; }
+  .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* GRID */
+  .grid-wrap { padding: 0 2rem 3rem; }
+  .section-label { font-size: .7rem; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 1rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1.2rem; }
+
+  .card {
+    background: var(--surface); border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--border); cursor: pointer;
+    transition: transform .2s, border-color .2s, box-shadow .2s;
+    text-decoration: none; color: inherit;
+    display: block;
+  }
+  .card:hover { transform: translateY(-4px); border-color: var(--accent); box-shadow: 0 8px 30px rgba(232,64,58,.15); }
+  .card-cover {
+    aspect-ratio: 2/3; background: var(--surface2);
+    overflow: hidden; position: relative;
+  }
+  .card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s; }
+  .card:hover .card-cover img { transform: scale(1.05); }
+  .card-cover .no-cover {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-family: 'Dela Gothic One', sans-serif; font-size: 2.5rem; color: var(--border);
+  }
+  .card-progress {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: rgba(0,0,0,.4);
+  }
+  .card-progress-bar { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .card-info { padding: .75rem; }
+  .card-title { font-size: .85rem; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-meta { font-size: .75rem; color: var(--muted); margin-top: .25rem; }
+  .badge {
+    display: inline-block; padding: .15rem .5rem; border-radius: 4px;
+    font-size: .65rem; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+  }
+  .badge-read { background: rgba(232,64,58,.15); color: var(--accent); }
+  .badge-new { background: rgba(255,122,53,.15); color: var(--accent2); }
+
+  /* EMPTY */
+  .empty { text-align: center; padding: 5rem 2rem; color: var(--muted); }
+  .empty h2 { font-family: 'Dela Gothic One', sans-serif; font-size: 1.5rem; color: var(--text); margin-bottom: .5rem; }
+
+  /* SCAN BTN */
+  .scan-bar { padding: .75rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1rem; }
+  .scan-bar span { font-size: .85rem; color: var(--muted); }
+
+  /* TOAST */
+  #toast {
+    position: fixed; bottom: 2rem; right: 2rem; padding: .75rem 1.25rem;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; font-size: .875rem; opacity: 0; transform: translateY(10px);
+    transition: all .3s; pointer-events: none; z-index: 999;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Manga<span>Shelf</span></div>
+  <div class="nav-links">
+    <a href="/" class="active">Library</a>
+    <a href="/search">Discover</a>
+    <a href="/sources">Sources</a>
+  </div>
+</nav>
+
+<div class="scan-bar">
+  <span id="scan-status">Scanning library…</span>
+  <button class="btn btn-ghost" onclick="scanLibrary()" style="padding:.4rem .8rem;font-size:.8rem;">↺ Rescan</button>
+</div>
+
+<div class="hero">
+  <h1>My Library</h1>
+  <div class="search-wrap">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="text" id="search-input" placeholder="Search your library…" oninput="filterLibrary(this.value)">
+  </div>
+  <a href="/search" class="btn btn-primary">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Add Manga
+  </a>
+</div>
+
+<div class="grid-wrap">
+  <div class="section-label">ALL MANGA</div>
+  <div class="grid" id="manga-grid"></div>
+  <div class="empty" id="empty-state" style="display:none;">
+    <h2>No manga yet</h2>
+    <p>Drop CBZ, CBR, PDF, or ZIP files into your manga folder, or use Discover to find new manga.</p>
+    <br>
+    <a href="/search" class="btn btn-primary">Browse Sources</a>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let allManga = [];
+
+async function loadLibrary(q = '') {
+  const res = await fetch(`/api/library?q=${encodeURIComponent(q)}`);
+  allManga = await res.json();
+  renderGrid(allManga);
+  document.getElementById('scan-status').textContent = `${allManga.length} manga in library`;
+}
+
+function renderGrid(data) {
+  const grid = document.getElementById('manga-grid');
+  const empty = document.getElementById('empty-state');
+  if (!data.length) { grid.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  grid.innerHTML = data.map(m => {
+    const prog = m.total_chapters > 0 ? (m.last_read_chapter / m.total_chapters * 100) : 0;
+    const cover = m.cover ? `<img src="${m.cover}" alt="${m.title}" loading="lazy">` : `<div class="no-cover">📖</div>`;
+    const badge = m.last_read_chapter > 0 ? `<span class="badge badge-read">Ch.${m.last_read_chapter}</span>` : `<span class="badge badge-new">NEW</span>`;
+    return `<a class="card" href="/read/${m.id}/${m.id}">
+      <div class="card-cover">
+        ${cover}
+        <div class="card-progress"><div class="card-progress-bar" style="width:${prog}%"></div></div>
+      </div>
+      <div class="card-info">
+        <div class="card-title">${m.title}</div>
+        <div class="card-meta">${badge} ${m.total_chapters} ch</div>
+      </div>
+    </a>`;
+  }).join('');
+
+  // Fix card links to point to first chapter
+  document.querySelectorAll('.card').forEach((card, i) => {
+    card.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const manga = data[i];
+      const res = await fetch(`/api/manga/${manga.id}`);
+      const d = await res.json();
+      if (d.chapters.length) {
+        window.location.href = `/read/${manga.id}/${d.chapters[0].id}`;
+      }
+    });
+  });
+}
+
+function filterLibrary(q) { loadLibrary(q); }
+
+async function scanLibrary() {
+  document.getElementById('scan-status').textContent = 'Scanning…';
+  await loadLibrary();
+}
+
+loadLibrary();
+</script>
+</body>
+</html>

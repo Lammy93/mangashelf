@@ -78,11 +78,11 @@ mkdir -p manga data
 ```docker-compose up --build -d```
 
 ## Manga Folder Structure
-manga/
-  My Manga Title/
-    Chapter_01.cbz
-    Chapter_02.cbz
-  Another Manga.pdf
+  manga/
+   My Manga Title/
+     Chapter_01.cbz
+      Chapter_02.cbz
+   Another Manga.pdf
 
 ## Updating
 ```docker-compose down```

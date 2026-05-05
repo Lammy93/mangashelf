@@ -1,81 +1,76 @@
-# MangaShelf 📚
+<p align="center">
+  <img src="assets/logo.png" alt="MangaShelf Logo" width="140"/>
+</p>
 
-A self-hosted manga reading app with a dark web UI, running entirely in Docker.
+<h1 align="center">MangaShelf</h1>
+
+<p align="center">
+  A self-hosted manga reading application with a modern dark interface, fully containerised with Docker.
+</p>
+
+---
+
+## Overview
+
+MangaShelf is a lightweight, self-hosted solution for reading and managing manga collections. It supports multiple file formats, flexible reading modes, and integrates with external sources for easy content access.
+
+---
 
 ## Features
-- 📖 Read CBZ, CBR, PDF, ZIP, RAR, EPUB
-- 🔁 Three reading modes: Single page, Double page spread, Long strip
-- 🔍 Search & download from MangaDex (built-in)
-- ➕ Add any custom source URL
-- 💾 Auto-saves reading progress per chapter
-- 🎨 Dark, clean UI
+
+- Supports CBZ, CBR, PDF, ZIP, RAR, and EPUB formats  
+- Multiple reading modes: single page, double page spread, and long strip  
+- Built-in search and download integration 
+- Ability to add custom source URLs  
+- Automatic saving of reading progress per chapter  
+- Clean, dark user interface  
 
 ---
 
-## Unraid Setup
+## Installation (Docker)
 
-### 1. Copy files to your server
-Transfer the `mangaapp` folder to your Unraid server, e.g.:
-```
-/mnt/user/appdata/mangashelf/
-```
+### Prerequisites
 
-### 2. Adjust paths in docker-compose.yml
-The default paths are:
-```yaml
-- /mnt/user/data/media/manga:/manga        # your manga library
-- /mnt/user/appdata/mangashelf/data:/data  # app database + cache
-```
-Change the left side of each line to match your actual share paths.
+- Docker installed  
+- Docker Compose installed  
 
-### 3. Create the appdata folder
+---
+## Quick Start (Docker)
+
+Run MangaShelf instantly:
+
 ```bash
-mkdir -p /mnt/user/appdata/mangashelf/data
-```
+docker run -d \
+  -p 8080:8080 \
+  -v $(pwd)/manga:/manga \
+  -v $(pwd)/data:/data \
+  --name mangashelf \
+  your-dockerhub-username/mangashelf
+Then open:
 
-### 4. Build and run
-Open the Unraid terminal and run:
-```bash
-cd /mnt/user/appdata/mangashelf
+http://localhost:8080
+
+2. Configure volumes
+
+Edit docker-compose.yml:
+
+- ./manga:/manga
+- ./data:/data
+3. Create directories
+mkdir -p manga data
+4. Run the application
 docker-compose up --build -d
-```
-
-First build takes ~2-3 minutes. After that:
-```bash
-docker-compose up -d    # start
-docker-compose down     # stop
-docker-compose logs -f  # view logs
-```
-
-### 5. Open the app
-Visit: **http://YOUR-UNRAID-IP:8080**
-
----
-
-## Folder structure for your manga
-```
-/mnt/user/data/media/manga/
+Manga Folder Structure
+manga/
   My Manga Title/
     Chapter_01.cbz
     Chapter_02.cbz
   Another Manga.pdf
-```
 
----
-
-## Reader controls
-| Action | Input |
-|---|---|
-| Next page | Click right side / Arrow Right / Arrow Down |
-| Previous page | Click left side / Arrow Left / Arrow Up |
-| Hide toolbar | H key or ⊙ button |
-| Change mode | Single / Double / Strip buttons in toolbar |
-
----
-
-## Updating
-```bash
-cd /mnt/user/appdata/mangashelf
+Updating
 docker-compose down
 docker-compose up --build -d
-```
+
+Notes
+Ensure proper permissions are set for mounted volumes
+Keep your manga library organised for best performance

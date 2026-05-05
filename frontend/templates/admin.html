@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/png" href="/static/img/favicon.ico">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — MangaShelf</title>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;--radius:10px;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
+  nav{display:flex;align-items:center;justify-content:space-between;padding:0 2rem;height:60px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+  
+  .nav-links{display:flex;gap:1.5rem;align-items:center;}.nav-links a{color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;}.nav-links a:hover{color:var(--text);}
+  .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;}
+  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
+  .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+  .btn-danger{background:transparent;color:var(--muted);border:1px solid var(--border);font-size:.75rem;padding:.3rem .6rem;}.btn-danger:hover{border-color:#c93530;color:#c93530;}
+  .page-content{padding:2rem;max-width:800px;}
+  h1{font-family:'Dela Gothic One',sans-serif;font-size:1.8rem;margin-bottom:.4rem;}
+  .subtitle{color:var(--muted);font-size:.875rem;margin-bottom:2rem;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-bottom:1.5rem;}
+  .card h2{font-family:'Dela Gothic One',sans-serif;font-size:1rem;margin-bottom:1.25rem;}
+  .form-row{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem;}
+  input.field,select.field{flex:1;min-width:140px;padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;}
+  input.field:focus,select.field:focus{border-color:var(--accent);}
+  .user-row{display:flex;align-items:center;gap:.75rem;padding:.65rem .9rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:.4rem;}
+  .user-avatar{width:32px;height:32px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;flex-shrink:0;}
+  .user-avatar.admin-av{background:rgba(232,64,58,.15);color:var(--accent);}
+  .user-name{font-weight:600;font-size:.875rem;flex:1;}
+  .badge{display:inline-block;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+  .badge-admin{background:rgba(232,64,58,.12);color:var(--accent);}
+  .badge-user{background:rgba(122,122,140,.12);color:var(--muted);}
+  .section-label{font-size:.7rem;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:.75rem;}
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" style="display:flex;align-items:center;text-decoration:none;"><img src="/static/img/logo.png" alt="MangaShelf" style="height:42px;width:42px;object-fit:cover;border-radius:8px;"></a>
+  <div class="nav-links">
+    <a href="/">← Library</a>
+    <a href="/admin" style="color:var(--text);">Admin</a>
+  </div>
+  <a href="/logout" class="btn btn-ghost">Sign out</a>
+</nav>
+<div class="page-content">
+  <h1>Admin Panel</h1>
+  <p class="subtitle">Manage users and system settings.</p>
+
+  <div class="card">
+    <h2>Add New User</h2>
+    <div class="form-row">
+      <input class="field" type="text" id="new-username" placeholder="Username">
+      <input class="field" type="password" id="new-password" placeholder="Password">
+      <select class="field" id="new-role">
+        <option value="user">User</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="addUser()">+ Add User</button>
+    <div id="add-error" style="color:var(--accent);font-size:.8rem;margin-top:.5rem;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Users</h2>
+    <div id="users-list"></div>
+  </div>
+</div>
+
+<script>
+async function loadUsers() {
+  const res = await fetch('/api/users');
+  const users = await res.json();
+  document.getElementById('users-list').innerHTML = users.map(u => `
+    <div class="user-row">
+      <div class="user-avatar ${u.role==='admin'?'admin-av':''}">${u.username[0].toUpperCase()}</div>
+      <div class="user-name">${u.username}</div>
+      <span class="badge ${u.role==='admin'?'badge-admin':'badge-user'}">${u.role}</span>
+      <span style="font-size:.75rem;color:var(--muted);">Joined ${u.created_at ? u.created_at.split('T')[0] : 'unknown'}</span>
+      ${u.role !== 'admin' ? `<button class="btn btn-danger" onclick="deleteUser('${u.id}','${u.username}')">Remove</button>` : ''}
+    </div>`).join('');
+}
+
+async function addUser() {
+  const username = document.getElementById('new-username').value.trim();
+  const password = document.getElementById('new-password').value;
+  const role = document.getElementById('new-role').value;
+  if (!username || !password) { document.getElementById('add-error').textContent = 'Fill in all fields.'; return; }
+  const res = await fetch('/api/users', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({username, password, role})
+  });
+  if (res.ok) {
+    document.getElementById('new-username').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('add-error').textContent = '';
+    loadUsers();
+  } else {
+    const d = await res.json();
+    document.getElementById('add-error').textContent = d.detail || 'Error adding user.';
+  }
+}
+
+async function deleteUser(id, name) {
+  if (!confirm(`Remove user "${name}"?`)) return;
+  await fetch(`/api/users/${id}`, {method:'DELETE'});
+  loadUsers();
+}
+
+loadUsers();
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" type="image/png" href="/static/img/favicon.ico">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sources — MangaShelf</title>
 <link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -10,7 +11,7 @@
   *{box-sizing:border-box;margin:0;padding:0;}
   body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
   nav{display:flex;align-items:center;justify-content:space-between;padding:0 2rem;height:60px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
-  .logo{font-family:'Dela Gothic One',sans-serif;font-size:1.4rem;}.logo span{color:var(--accent);}
+  
   .nav-links{display:flex;gap:1.5rem;}.nav-links a{color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;transition:color .2s;}.nav-links a:hover,.nav-links a.active{color:var(--text);}
   .page-content{padding:2rem;max-width:700px;}
   h1{font-family:'Dela Gothic One',sans-serif;font-size:1.8rem;margin-bottom:.5rem;}
@@ -45,7 +46,7 @@
 </head>
 <body>
 <nav>
-  <div class="logo">Manga<span>Shelf</span></div>
+  <a href="/" style="display:flex;align-items:center;text-decoration:none;"><img src="/static/img/logo.png" alt="MangaShelf" style="height:42px;width:42px;object-fit:cover;border-radius:8px;"></a>
   <div class="nav-links">
     <a href="/">Library</a>
     <a href="/search">Discover</a>

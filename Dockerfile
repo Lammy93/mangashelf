@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 
-# Ensure static dirs exist even if empty
 RUN mkdir -p /app/frontend/static/css \
              /app/frontend/static/js \
              /app/frontend/static/img

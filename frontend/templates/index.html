@@ -77,10 +77,10 @@
     <a href="/" class="active">Library</a>
     <a href="/search">Discover</a>
     <a href="/sources">Sources</a>
-    {% if user.role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
+    {% if user and user.role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
   </div>
   <div class="nav-user">
-    <span class="user-badge {% if user.role == 'admin' %}admin{% endif %}">{{ user.username }}</span>
+    <span class="user-badge{% if user and user.role == 'admin' %}admin{% endif %}">{{ user.username }}</span>
     <a href="/logout" class="btn btn-ghost">Sign out</a>
   </div>
 </nav>

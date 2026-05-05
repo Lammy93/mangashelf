@@ -184,7 +184,13 @@ def scan_manga_dir():
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "user": None
+        }
+    )
 
 @app.get("/read/{manga_id}/{chapter_id}")
 async def reader(request: Request, manga_id: str, chapter_id: str):

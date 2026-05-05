@@ -150,9 +150,39 @@ def scan_manga_dir():
                     except:
                         pass
                 db.execute(
-                    "INSERT OR IGNORE INTO manga VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (manga_id, item.name, str(item), cover, len(chapters), 0, 0, 'single', None, None, datetime.now().isoformat(), datetime.now().isoformat(), 'local')
-                )
+    """
+    INSERT OR IGNORE INTO manga (
+        id,
+        title,
+        path,
+        cover,
+        total_chapters,
+        last_read_chapter,
+        last_read_page,
+        reading_mode,
+        source,
+        source_id,
+        added_at,
+        updated_at,
+        status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        manga_id,
+        item.name,
+        str(item),
+        cover,
+        len(chapters),
+        0,
+        0,
+        'single',
+        None,
+        None,
+        datetime.now().isoformat(),
+        datetime.now().isoformat(),
+        'local'
+    )
+)
                 for i, ch in enumerate(chapters):
                     ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
                     db.execute(
@@ -168,10 +198,37 @@ def scan_manga_dir():
                     cover = pages[0] if pages else None
                 except:
                     cover = None
-                db.execute(
-                    "INSERT OR IGNORE INTO manga VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (manga_id, item.stem, str(item), cover, 1, 0, 0, 'single', None, None, datetime.now().isoformat(), datetime.now().isoformat(), 'local')
-                )
+                db.execute("""
+INSERT OR IGNORE INTO manga (
+    id,
+    title,
+    path,
+    cover,
+    total_chapters,
+    last_read_chapter,
+    last_read_page,
+    reading_mode,
+    source,
+    source_id,
+    added_at,
+    updated_at,
+    status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    manga_id,
+    item.stem,
+    str(item),
+    cover,
+    1,
+    0,
+    0,
+    'single',
+    None,
+    None,
+    datetime.now().isoformat(),
+    datetime.now().isoformat(),
+    'local'
+))
                 ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 db.execute(
                     "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",

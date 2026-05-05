@@ -401,13 +401,7 @@ async def serve_cache(stem: str, filename: str):
 
 #  ── Password  ────────────────────────────────────────────────────────
 def hash_password(pw):
-    return pwd_ctx.hash(pw[:72])
-
-def verify_password(pw, hashed):
-    return pwd_ctx.verify(pw[:72], hashed)
-
-def safe_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
-def hash_password(pw):
-    return pwd_ctx.hash(safe_password(pw))
+def verify_password(pw, hashed):
+    return hashlib.sha256(pw.encode()).hexdigest() == hashed

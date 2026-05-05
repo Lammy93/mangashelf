@@ -80,7 +80,7 @@
     {% if user and user.role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
   </div>
   <div class="nav-user">
-    <span class="user-badge{% if user and user.role == 'admin' %}admin{% endif %}">{{ user.username }}</span>
+    <span class="user-badge{% if user and user.role == 'admin' %}admin{% endif %}"> {{ user.username if user else 'Guest' }} </span>
     <a href="/logout" class="btn btn-ghost">Sign out</a>
   </div>
 </nav>

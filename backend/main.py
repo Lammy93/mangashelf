@@ -1249,8 +1249,16 @@ async def download_and_cache_cover(url: str, cache_name: str) -> str:
         pass
     return url
 
+import logging
+logger = logging.getLogger("mangashelf")
+
 def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
     try:
+        logger.info(f"[metadata] Fetching for '{manga_title}' ({manga_id})")
+        db = get_db()
+        manga_row = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+        existing = dict(manga_row) if manga_row else {}
+        db.close()
         async def _fetch():
             query = """
             query($search: String, $type: MediaType) {
@@ -1270,6 +1278,7 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
                     data = await resp.json()
             media_list = data.get("data", {}).get("Page", {}).get("media", [])
             if not media_list:
+                logger.info(f"[metadata] No results for '{manga_title}'")
                 return
             best = None
             for m in media_list:
@@ -1288,12 +1297,12 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
                 "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, cover=?, updated_at=? WHERE id=?",
                 (
                     title,
-                    authors[0] if authors else None,
-                    authors[1] if len(authors) > 1 else None,
-                    ", ".join(best.get("genres", [])),
-                    (best.get("description") or "")[:2000] if best.get("description") else None,
-                    best.get("status", "").upper() if best.get("status") else None,
-                    best.get("chapters") or 0,
+                    authors[0] if authors else existing.get("author"),
+                    authors[1] if len(authors) > 1 else existing.get("artist"),
+                    ", ".join(best.get("genres", [])) or existing.get("genre"),
+                    (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                    best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                    best.get("chapters") or existing.get("total_chapters", 0),
                     cached_cover,
                     datetime.now().isoformat(),
                     manga_id
@@ -1302,22 +1311,31 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
             db.commit()
             p = Path(manga_path)
             if p.is_dir():
-                write_nfo(p, {
+                existing_nfo = read_nfo(p)
+                nfo_data = {
                     "Title": title,
-                    "Author": authors[0] if authors else None,
-                    "Artist": authors[1] if len(authors) > 1 else None,
-                    "Genre": ", ".join(best.get("genres", [])),
-                    "Summary": (best.get("description") or "")[:2000] if best.get("description") else None,
-                    "Status": best.get("status", "").upper() if best.get("status") else None,
-                    "TotalChapters": best.get("chapters") or 0,
+                    "Author": authors[0] if authors else existing.get("author"),
+                    "Artist": authors[1] if len(authors) > 1 else existing.get("artist"),
+                    "Genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
+                    "Summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                    "Status": best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                    "TotalChapters": best.get("chapters") or existing.get("total_chapters", 0),
                     "Cover": cached_cover,
                     "Source": "anilist",
                     "SourceId": str(best["id"])
-                })
+                }
+                for k, v in nfo_data.items():
+                    if v is not None and v != "" and v != 0:
+                        existing_nfo[k] = v
+                write_nfo(p, existing_nfo)
+                logger.info(f"[metadata] Wrote NFO for '{title}' at {p}")
+            else:
+                logger.info(f"[metadata] Skipped NFO write (not a directory): {manga_path}")
             db.close()
+            logger.info(f"[metadata] Updated DB for '{title}' ({manga_id})")
         asyncio.run(_fetch())
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"[metadata] Failed for '{manga_title}': {e}")
 
 @app.post("/api/manga/{manga_id}/scrape-cover")
 async def scrape_manga_cover(manga_id: str, request: Request):
@@ -1343,6 +1361,17 @@ async def scrape_manga_cover(manga_id: str, request: Request):
         db.close()
     threading.Thread(target=do_scrape, daemon=True).start()
     return {"ok": True}
+
+@app.post("/api/manga/{manga_id}/fetch-metadata")
+async def fetch_metadata(manga_id: str, request: Request):
+    require_admin(request)
+    db = get_db()
+    manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+    db.close()
+    if not manga:
+        raise HTTPException(404, "Manga not found")
+    threading.Thread(target=auto_fetch_metadata, args=(manga_id, manga["path"], manga["title"]), daemon=True).start()
+    return {"ok": True, "message": f"Fetching metadata for '{manga['title']}'"}
 
 @app.get("/api/manga/{manga_id}")
 async def get_manga(manga_id: str, request: Request):

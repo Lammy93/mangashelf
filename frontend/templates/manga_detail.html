@@ -361,7 +361,9 @@ async function autoFetchMetadataIfMissing() {
   const params = new URLSearchParams({source, external_id: best.id});
   if (best.cover) params.set('cover', best.cover);
   await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`);
-  load();
+  const updated = await (await fetch(`/api/manga/${MANGA_ID}`)).json();
+  data.manga = updated.manga;
+  renderHero();
 }
 
 async function openEditModal() {

@@ -39,6 +39,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 import queue
 _processing_manga = set()
 _processing_lock = threading.Lock()
+_extracting_chapters = set()
+_extracting_chapters_lock = threading.Lock()
 
 def is_manga_processing(manga_id: str) -> bool:
     with _processing_lock:
@@ -718,6 +720,7 @@ def scan_manga_dir():
                 meta.get('year')
             )
         )
+                    title = meta.get('title') or meta.get('series') or item.name
                     for i, ch in enumerate(chapters):
                         ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
                         ch_num = float(i + 1)
@@ -726,10 +729,9 @@ def scan_manga_dir():
                             "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                             (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None, ch_slug)
                         )
-                        title = meta.get('title') or meta.get('series') or item.name
-                        _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
-                        if not nfo or not nfo.get("title") or not nfo.get("author"):
-                            new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
+                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
+                    if not nfo or not nfo.get("title") or not nfo.get("author"):
+                        new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
                 _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
             elif item.suffix.lower() in SUPPORTED_FORMATS:
                 manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
@@ -821,6 +823,38 @@ def pre_extract_pages(manga_id: str):
         logger.error(f"[pre-extract] Failed for manga {manga_id}: {e}")
     finally:
         mark_manga_processing(manga_id, False)
+
+def _extract_chapter_bg(path: str):
+    stem = Path(path).stem
+    try:
+        file_path = Path(path)
+        suffix = file_path.suffix.lower()
+        out_dir = Path("/data/cache") / stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                for img in sorted([n for n in z.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}]):
+                    out_path = out_dir / Path(img).name
+                    if not out_path.exists():
+                        out_path.write_bytes(z.read(img))
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                for img in sorted([n for n in r.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}]):
+                    out_path = out_dir / Path(img).name
+                    if not out_path.exists():
+                        out_path.write_bytes(r.read(img))
+        elif suffix == '.pdf':
+            doc = fitz.open(str(file_path))
+            for i in range(len(doc)):
+                cached = out_dir / f"page_{i:04d}.png"
+                if not cached.exists():
+                    doc[i].get_pixmap(dpi=150).save(str(cached))
+            doc.close()
+    except Exception as e:
+        logger.warning(f"[bg-extract] Error extracting {stem}: {e}")
+    finally:
+        with _extracting_chapters_lock:
+            _extracting_chapters.discard(stem)
 
 # ── Routes: Pages ─────────────────────────────────────────────────────────────
 
@@ -1500,12 +1534,9 @@ async def get_manga(manga_id: str, request: Request):
         db.close()
         raise HTTPException(404, "Manga not found")
     volumes = db.execute("SELECT * FROM volumes WHERE manga_id=? ORDER BY volume_number", (manga_id,)).fetchall()
-    chapters = db.execute("SELECT * FROM chapters WHERE manga_id=? ORDER BY chapter_number", (manga_id,)).fetchall()
-    progress_rows = db.execute(
-        "SELECT c.id, c.is_read, c.read_page, c.pages FROM chapters c WHERE c.manga_id=?", (manga_id,)
-    ).fetchall()
+    chapters = db.execute("SELECT id, manga_id, chapter_number, title, slug, path, pages, read_page, is_read, source_url, downloaded FROM chapters WHERE manga_id=? ORDER BY chapter_number", (manga_id,)).fetchall()
     db.close()
-    progress = {r["id"]: {"is_read": r["is_read"], "page": r["read_page"], "pages": r["pages"]} for r in progress_rows}
+    progress = {r["id"]: {"is_read": r["is_read"], "page": r["read_page"], "pages": r["pages"]} for r in chapters}
     return {
         "manga": dict(manga),
         "volumes": [dict(v) for v in volumes],
@@ -1548,6 +1579,11 @@ async def get_pages(chapter_id: str):
     db.commit()
     db.close()
     urls = [f"/api/chapter/{chapter_id}/page/{i}" for i in range(total)]
+    stem = file_path.stem
+    with _extracting_chapters_lock:
+        if stem not in _extracting_chapters:
+            _extracting_chapters.add(stem)
+            threading.Thread(target=_extract_chapter_bg, args=(str(file_path),), daemon=True).start()
     return {"pages": urls, "total": total}
 
 @app.get("/api/chapter/{chapter_id}/page/{page_num}")
@@ -1560,6 +1596,7 @@ async def get_chapter_page(chapter_id: str, page_num: int):
     out_dir = Path("/data/cache") / file_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = file_path.suffix.lower()
+    ok = False
     try:
         if suffix in ('.cbz', '.zip'):
             with zipfile.ZipFile(file_path) as z:
@@ -1571,6 +1608,7 @@ async def get_chapter_page(chapter_id: str, page_num: int):
                 cached = out_dir / img_name
                 if not cached.exists():
                     cached.write_bytes(z.read(img_member))
+                ok = True
                 return FileResponse(str(cached))
         elif suffix in ('.cbr', '.rar'):
             with rarfile.RarFile(file_path) as r:
@@ -1582,6 +1620,7 @@ async def get_chapter_page(chapter_id: str, page_num: int):
                 cached = out_dir / img_name
                 if not cached.exists():
                     cached.write_bytes(r.read(img_member))
+                ok = True
                 return FileResponse(str(cached))
         elif suffix == '.pdf':
             cached = out_dir / f"page_{page_num:04d}.png"
@@ -1593,6 +1632,7 @@ async def get_chapter_page(chapter_id: str, page_num: int):
                 pix = doc[page_num].get_pixmap(dpi=150)
                 pix.save(str(cached))
                 doc.close()
+            ok = True
             return FileResponse(str(cached))
     except HTTPException:
         raise
@@ -1600,6 +1640,12 @@ async def get_chapter_page(chapter_id: str, page_num: int):
         logger.warning(f"[page] Error extracting page {page_num} from {file_path.name}: {e}")
         raise HTTPException(500, "Failed to extract page")
     finally:
+        if ok:
+            stem = file_path.stem
+            with _extracting_chapters_lock:
+                if stem not in _extracting_chapters:
+                    _extracting_chapters.add(stem)
+                    threading.Thread(target=_extract_chapter_bg, args=(str(file_path),), daemon=True).start()
         db.close()
     raise HTTPException(400, "Unsupported file format")
 

@@ -23,14 +23,15 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     unrar-free \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 99 --gid 100 appuser
+    && groupadd -g 100 appgroup \
+    && useradd --create-home --uid 99 --gid appgroup appuser
 
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appgroup /app
 
 USER appuser
 

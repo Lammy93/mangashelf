@@ -7,28 +7,64 @@
 <title>MangaShelf</title>
 <link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;--radius:10px;}
+  :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;--radius:10px;--sidebar-w:240px;--sidebar-collapsed:60px;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
-  nav{display:flex;align-items:center;justify-content:space-between;padding:0 2rem;height:60px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
-  
-  .nav-links{display:flex;gap:1.5rem;align-items:center;}.nav-links a{color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;transition:color .2s;}.nav-links a:hover,.nav-links a.active{color:var(--text);}
-  .nav-user{display:flex;align-items:center;gap:.75rem;}
-  .user-badge{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:.3rem .75rem;font-size:.8rem;font-weight:600;}
-  .user-badge.admin{border-color:var(--accent);color:var(--accent);}
-  .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;}
-  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
-  .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+
+  /* SIDEBAR */
+  #sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100;transition:width .3s ease;overflow:hidden;}
+  #sidebar.collapsed{width:var(--sidebar-collapsed);}
+  #sidebar-header{display:flex;align-items:center;padding:.75rem;gap:.5rem;border-bottom:1px solid var(--border);min-height:60px;}
+  #sidebar-logo{flex-shrink:0;height:36px;width:36px;border-radius:8px;object-fit:cover;}
+  #sidebar-logo-wrap{display:flex;align-items:center;gap:.5rem;text-decoration:none;overflow:hidden;}
+  #sidebar-title{font-family:'Dela Gothic One',sans-serif;font-size:1rem;white-space:nowrap;opacity:1;transition:opacity .2s;}
+  #sidebar.collapsed #sidebar-title{opacity:0;pointer-events:none;}
+  #toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:6px;transition:all .2s;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  #toggle-btn:hover{color:var(--text);background:var(--surface2);}
+  #toggle-btn svg{width:20px;height:20px;}
+  #sidebar.collapsed #toggle-btn svg{transform:rotate(180deg);}
+  #sidebar-nav{flex:1;padding:.75rem;display:flex;flex-direction:column;gap:.25rem;}
+  .nav-item{display:flex;align-items:center;gap:.75rem;padding:.65rem .75rem;border-radius:8px;color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;transition:all .2s;white-space:nowrap;overflow:hidden;}
+  .nav-item:hover{color:var(--text);background:var(--surface2);}
+  .nav-item.active{color:var(--text);background:var(--surface2);border-left:3px solid var(--accent);}
+  .nav-item svg{width:18px;height:18px;flex-shrink:0;}
+  .nav-item span{opacity:1;transition:opacity .2s;}
+  #sidebar.collapsed .nav-item span{opacity:0;pointer-events:none;}
+  #sidebar-footer{padding:.75rem;border-top:1px solid var(--border);}
+  .sidebar-user{display:flex;align-items:center;gap:.75rem;padding:.5rem .75rem;border-radius:8px;background:var(--surface2);overflow:hidden;}
+  .user-avatar{width:28px;height:28px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0;}
+  .user-avatar.admin-av{background:rgba(232,64,58,.15);color:var(--accent);}
+  .user-info{flex:1;min-width:0;transition:opacity .2s;}
+  #sidebar.collapsed .user-info{opacity:0;pointer-events:none;}
+  .user-name{font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .user-role{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+  .logout-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:4px;transition:all .2s;flex-shrink:0;}
+  .logout-btn:hover{color:var(--accent);}
+
+  /* OVERLAY */
+  #overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;opacity:0;pointer-events:none;transition:opacity .3s;}
+  #overlay.active{opacity:1;pointer-events:auto;}
+
+  /* MAIN */
+  #main{margin-left:var(--sidebar-w);transition:margin-left .3s ease;padding-bottom:2rem;}
+  #main.expanded{margin-left:var(--sidebar-collapsed);}
+
+  /* TOP BAR */
+  .top-bar{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;height:60px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:50;}
+  #menu-btn{display:none;background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:6px;transition:all .2s;}
+  #menu-btn:hover{color:var(--text);background:var(--surface2);}
+  .top-bar-title{font-family:'Dela Gothic One',sans-serif;font-size:1rem;}
+  .top-actions{margin-left:auto;display:flex;align-items:center;gap:.75rem;}
 
   /* SEARCH BAR */
-  .search-bar{padding:1.5rem 2rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;}
+  .search-bar{padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;}
   .search-wrap{flex:1;min-width:240px;position:relative;}
   .search-wrap input{width:100%;padding:.65rem 1rem .65rem 2.8rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;font-size:.9rem;outline:none;transition:border-color .2s;font-family:inherit;}
   .search-wrap input:focus{border-color:var(--accent);}
   .search-wrap svg{position:absolute;left:.9rem;top:50%;transform:translateY(-50%);opacity:.4;}
 
   /* SECTIONS */
-  .section{padding:0 2rem 2.5rem;}
+  .section{padding:0 1.5rem 2.5rem;}
   .section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;}
   .section-title{font-family:'Dela Gothic One',sans-serif;font-size:1.1rem;}
   .section-sub{font-size:.75rem;color:var(--muted);}
@@ -66,72 +102,155 @@
   .scrape-btn{padding:.25rem .6rem;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.7rem;cursor:pointer;font-family:inherit;transition:all .2s;}
   .scrape-btn:hover{border-color:var(--accent2);color:var(--accent2);}
 
+  .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;}
+  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
+  .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+
   #empty-state{text-align:center;padding:5rem 1rem;color:var(--muted);}
   #empty-state h2{font-family:'Dela Gothic One',sans-serif;font-size:1.4rem;color:var(--text);margin-bottom:.5rem;}
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    #sidebar{transform:translateX(-100%);width:var(--sidebar-w) !important;}
+    #sidebar.mobile-open{transform:translateX(0);}
+    #toggle-btn{display:none !important;}
+    #menu-btn{display:flex !important;}
+    #main{margin-left:0 !important;}
+  }
 </style>
 </head>
 <body>
-<nav>
-  <a href="/" style="display:flex;align-items:center;text-decoration:none;"><img src="/static/img/logo.png" alt="MangaShelf" style="height:42px;width:42px;object-fit:cover;border-radius:8px;"></a>
-  <div class="nav-links">
-    <a href="/" class="active">Library</a>
-    <a href="/search">Discover</a>
-    <a href="/sources">Sources</a>
-    {% if user and user.role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
-  </div>
-  <div class="nav-user">
-    <span class="user-badge{% if user and user.role == 'admin' %}admin{% endif %}"> {{ user.username if user else 'Guest' }} </span>
-    <a href="/logout" class="btn btn-ghost">Sign out</a>
-  </div>
-</nav>
 
-<div class="search-bar">
-  <div class="search-wrap">
-    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    <input type="text" id="search-input" placeholder="Search library…" oninput="filterLibrary(this.value)">
+<!-- SIDEBAR -->
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <a id="sidebar-logo-wrap" href="/">
+      <img id="sidebar-logo" src="/static/img/logo.png" alt="MangaShelf">
+      <span id="sidebar-title">MangaShelf</span>
+    </a>
+    <button id="toggle-btn" onclick="toggleSidebar()" title="Toggle sidebar">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+    </button>
   </div>
-  <a href="/search" class="btn btn-primary">+ Add Manga</a>
-  <button class="btn btn-ghost" onclick="scrapeAllCovers()">🖼 Scrape Covers</button>
-</div>
-
-<!-- CONTINUE READING -->
-<div class="section" id="continue-section" style="display:none;">
-  <div class="section-header">
-    <div>
-      <div class="section-title">Continue Reading</div>
-      <div class="section-sub">Pick up where you left off</div>
+  <nav id="sidebar-nav">
+    <a href="/" class="nav-item active">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      <span>Library</span>
+    </a>
+    <a href="/search" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      <span>Discover</span>
+    </a>
+    <a href="/sources" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+      <span>Sources</span>
+    </a>
+    {% if user and user.role == 'admin' %}
+    <a href="/admin" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      <span>Admin</span>
+    </a>
+    {% endif %}
+  </nav>
+  <div id="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{{ user.username[0] if user and user.username else 'G' }}</div>
+      <div class="user-info">
+        <div class="user-name">{{ user.username if user else 'Guest' }}</div>
+        <div class="user-role">{{ user.role if user else '' }}</div>
+      </div>
+      <a href="/logout" class="logout-btn" title="Sign out">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+      </a>
     </div>
   </div>
-  <div class="continue-row" id="continue-row"></div>
-</div>
+</aside>
 
-<!-- RECENTLY ADDED -->
-<div class="section" id="recent-section" style="display:none;">
-  <div class="section-header">
-    <div>
-      <div class="section-title">Recently Added</div>
-      <div class="section-sub">New to your library</div>
+<div id="overlay" onclick="closeMobileSidebar()"></div>
+
+<!-- MAIN CONTENT -->
+<div id="main">
+  <div class="top-bar">
+    <button id="menu-btn" onclick="openMobileSidebar()">
+      <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="top-bar-title">Library</div>
+    <div class="top-actions">
+      <a href="/search" class="btn btn-primary">+ Add Manga</a>
+      <button class="btn btn-ghost" onclick="scrapeAllCovers()">🖼 Scrape Covers</button>
     </div>
   </div>
-  <div class="grid" id="recent-grid"></div>
-</div>
 
-<!-- ALL MANGA -->
-<div class="section">
-  <div class="section-header">
-    <div class="section-title" id="all-label">All Manga</div>
-    <span id="count-label" style="font-size:.8rem;color:var(--muted);"></span>
+  <div class="search-bar">
+    <div class="search-wrap">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="search-input" placeholder="Search library…" oninput="filterLibrary(this.value)">
+    </div>
   </div>
-  <div class="grid" id="manga-grid"></div>
-  <div id="empty-state" style="display:none;">
-    <h2>No manga yet</h2>
-    <p>Drop files in your manga folder or use Discover to add new manga.</p><br>
-    <a href="/search" class="btn btn-primary">Browse Sources</a>
+
+  <!-- CONTINUE READING -->
+  <div class="section" id="continue-section" style="display:none;">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Continue Reading</div>
+        <div class="section-sub">Pick up where you left off</div>
+      </div>
+    </div>
+    <div class="continue-row" id="continue-row"></div>
+  </div>
+
+  <!-- RECENTLY ADDED -->
+  <div class="section" id="recent-section" style="display:none;">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Recently Added</div>
+        <div class="section-sub">New to your library</div>
+      </div>
+    </div>
+    <div class="grid" id="recent-grid"></div>
+  </div>
+
+  <!-- ALL MANGA -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title" id="all-label">All Manga</div>
+      <span id="count-label" style="font-size:.8rem;color:var(--muted);"></span>
+    </div>
+    <div class="grid" id="manga-grid"></div>
+    <div id="empty-state" style="display:none;">
+      <h2>No manga yet</h2>
+      <p>Drop files in your manga folder or use Discover to add new manga.</p><br>
+      <a href="/search" class="btn btn-primary">Browse Sources</a>
+    </div>
   </div>
 </div>
 
 <script>
 let allManga = [];
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+  document.getElementById('main').classList.toggle('expanded');
+  localStorage.setItem('sidebarCollapsed', document.getElementById('sidebar').classList.contains('collapsed'));
+}
+
+function openMobileSidebar() {
+  document.getElementById('sidebar').classList.add('mobile-open');
+  document.getElementById('overlay').classList.add('active');
+}
+
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('mobile-open');
+  document.getElementById('overlay').classList.remove('active');
+}
+
+(function() {
+  const collapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+  if (collapsed) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.getElementById('main').classList.add('expanded');
+  }
+})();
 
 async function loadHome() {
   const [contRes, recRes] = await Promise.all([

@@ -334,6 +334,20 @@ async function readFirst() {
   if (first) window.location = `/read/${MANGA_ID}/${first.id}`;
 }
 
+async function autoFetchMetadataIfMissing() {
+  const res = await fetch(`/api/search-all?q=${encodeURIComponent(data.manga.title)}`);
+  const results = await res.json();
+  const anilist = results.find(r => r.source === 'anilist');
+  const mal = results.find(r => r.source === 'myanimelist');
+  const best = anilist || mal;
+  if (!best) return;
+  const source = best.source;
+  const params = new URLSearchParams({source, external_id: best.id});
+  if (best.cover) params.set('cover', best.cover);
+  await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`, {method:'PUT'});
+  load();
+}
+
 async function openEditModal() {
   const res = await fetch(`/api/manga/${MANGA_ID}/nfo`);
   const nfo = await res.json();

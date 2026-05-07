@@ -217,6 +217,25 @@ def init_db():
         INSERT OR IGNORE INTO sources VALUES ('mangafox','MangaFox','https://fanfox.net','mangafox',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','metadata',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','metadata',1,datetime('now'));
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id TEXT,
+            manga_id TEXT,
+            added_at TEXT,
+            PRIMARY KEY (user_id, manga_id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (manga_id) REFERENCES manga(id)
+        );
+        CREATE TABLE IF NOT EXISTS followed_manga (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            title TEXT,
+            cover TEXT,
+            last_chapter_count INTEGER DEFAULT 0,
+            added_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
         """)
 
 def migrate_db():
@@ -412,6 +431,71 @@ def start_interval_scanner():
 
 start_folder_watcher()
 start_interval_scanner()
+
+def start_followed_updates_checker():
+    def check_loop():
+        while True:
+            interval = int(get_scan_setting("scan_interval") or 300)
+            time.sleep(interval)
+            db = get_db()
+            followed = db.execute("SELECT * FROM followed_manga WHERE user_id IS NOT NULL").fetchall()
+            db.close()
+            for item in followed:
+                source = item["source"]
+                source_id = item["source_id"]
+                try:
+                    if source == "mangadex":
+                        async def check_mangadex():
+                            async with aiohttp.ClientSession() as session:
+                                url = f"https://api.mangadex.org/manga/{source_id}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=1"
+                                async with session.get(url) as resp:
+                                    data = await resp.json()
+                            return len(data.get("data", [])) if data.get("data") else item["last_chapter_count"]
+                        new_count = asyncio.run(check_mangadex())
+                        if new_count > item["last_chapter_count"]:
+                            db = get_db()
+                            db.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db.commit()
+                            db.close()
+                    elif source == "mangakakalot":
+                        async def check_mangakakalot():
+                            from bs4 import BeautifulSoup
+                            url = f"https://mangakakalot.com{source_id}" if not source_id.startswith("http") else source_id
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(url, headers=headers) as resp:
+                                    html = await resp.text()
+                            soup = BeautifulSoup(html, "html.parser")
+                            chapters = soup.select("ul.row-content-chapter li")
+                            return len(chapters)
+                        new_count = asyncio.run(check_mangakakalot())
+                        if new_count > item["last_chapter_count"]:
+                            db = get_db()
+                            db.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db.commit()
+                            db.close()
+                    elif source == "mangafox":
+                        async def check_mangafox():
+                            from bs4 import BeautifulSoup
+                            url = f"https://fanfox.net{source_id}" if not source_id.startswith("http") else source_id
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(url, headers=headers) as resp:
+                                    html = await resp.text()
+                            soup = BeautifulSoup(html, "html.parser")
+                            chapters = soup.select(".detail-main-list li")
+                            return len(chapters)
+                        new_count = asyncio.run(check_mangafox())
+                        if new_count > item["last_chapter_count"]:
+                            db = get_db()
+                            db.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db.commit()
+                            db.close()
+                except Exception:
+                    pass
+    threading.Thread(target=check_loop, daemon=True).start()
+
+start_followed_updates_checker()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -675,6 +759,20 @@ async def index(request: Request):
         {"request": request, "user": user}
     )
 
+@app.get("/library")
+async def library_page(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("library.html", {"request": request, "user": user})
+
+@app.get("/favorites")
+async def favorites_page(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("favorites.html", {"request": request, "user": user})
+
 @app.get("/manga/{manga_id}")
 async def manga_detail(request: Request, manga_id: str):
     user = await get_current_user(request)
@@ -823,7 +921,14 @@ async def get_continue_reading():
 @app.get("/api/recently-added")
 async def get_recently_added():
     db = get_db()
-    rows = db.execute("SELECT * FROM manga ORDER BY added_at DESC LIMIT 8").fetchall()
+    rows = db.execute("""
+        SELECT m.*, COUNT(c.id) as downloaded_chapters
+        FROM manga m
+        LEFT JOIN chapters c ON c.manga_id = m.id
+        GROUP BY m.id
+        ORDER BY m.added_at DESC
+        LIMIT 8
+    """).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -919,6 +1024,102 @@ async def toggle_scan_directory(dir_id: str, request: Request):
     start_folder_watcher()
     scan_manga_dir()
     return {"ok": True}
+
+@app.post("/api/manga/{manga_id}/favorite")
+async def toggle_favorite(manga_id: str, request: Request):
+    user = require_auth(request)
+    db = get_db()
+    existing = db.execute("SELECT 1 FROM favorites WHERE user_id=? AND manga_id=?", (user["uid"], manga_id)).fetchone()
+    if existing:
+        db.execute("DELETE FROM favorites WHERE user_id=? AND manga_id=?", (user["uid"], manga_id))
+        db.commit()
+        db.close()
+        return {"ok": True, "favorited": False}
+    db.execute("INSERT OR IGNORE INTO favorites (user_id, manga_id, added_at) VALUES (?,?,?)", (user["uid"], manga_id, datetime.now().isoformat()))
+    db.commit()
+    db.close()
+    return {"ok": True, "favorited": True}
+
+@app.get("/api/favorites")
+async def get_favorites(request: Request):
+    user = require_auth(request)
+    db = get_db()
+    rows = db.execute("""
+        SELECT m.*, COUNT(c.id) as downloaded_chapters
+        FROM manga m
+        JOIN favorites f ON f.manga_id = m.id
+        LEFT JOIN chapters c ON c.manga_id = m.id
+        WHERE f.user_id=?
+        GROUP BY m.id
+        ORDER BY f.added_at DESC
+    """, (user["uid"],)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/manga/{manga_id}/is-favorite")
+async def is_favorite(manga_id: str, request: Request):
+    user = require_auth(request)
+    db = get_db()
+    existing = db.execute("SELECT 1 FROM favorites WHERE user_id=? AND manga_id=?", (user["uid"], manga_id)).fetchone()
+    db.close()
+    return {"favorited": existing is not None}
+
+@app.post("/api/follow")
+async def follow_manga(request: Request):
+    user = require_auth(request)
+    data = await request.json()
+    manga_id = str(uuid.uuid4())
+    db = get_db()
+    existing = db.execute("SELECT id FROM followed_manga WHERE user_id=? AND source=? AND source_id=?", (user["uid"], data.get("source",""), data.get("source_id",""))).fetchone()
+    if existing:
+        db.close()
+        return {"ok": True, "followed": True}
+    db.execute("INSERT INTO followed_manga (id, user_id, source, source_id, title, cover, last_chapter_count, added_at) VALUES (?,?,?,?,?,?,?,?)", (
+        manga_id, user["uid"], data.get("source",""), data.get("source_id",""), data.get("title",""), data.get("cover",""), data.get("chapters", 0), datetime.now().isoformat()
+    ))
+    db.commit()
+    db.close()
+    return {"ok": True, "followed": True}
+
+@app.post("/api/unfollow/{follow_id}")
+async def unfollow_manga(follow_id: str, request: Request):
+    user = require_auth(request)
+    db = get_db()
+    db.execute("DELETE FROM followed_manga WHERE id=? AND user_id=?", (follow_id, user["uid"]))
+    db.commit()
+    db.close()
+    return {"ok": True}
+
+@app.get("/api/followed")
+async def get_followed(request: Request):
+    user = require_auth(request)
+    db = get_db()
+    rows = db.execute("SELECT * FROM followed_manga WHERE user_id=? ORDER BY added_at DESC", (user["uid"],)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/check-followed-updates")
+async def check_followed_updates(request: Request):
+    user = require_auth(request)
+    db = get_db()
+    followed = db.execute("SELECT * FROM followed_manga WHERE user_id=?", (user["uid"],)).fetchall()
+    updates = []
+    for item in followed:
+        source = item["source"]
+        source_id = item["source_id"]
+        new_count = item["last_chapter_count"]
+        if source == "mangadex":
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.mangadex.org/manga/{source_id}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=1"
+                async with session.get(url) as resp:
+                    ch_data = await resp.json()
+            new_count = len(ch_data.get("data", []))
+        if new_count > item["last_chapter_count"]:
+            db.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+            updates.append({"title": item["title"], "new_chapters": new_count - item["last_chapter_count"]})
+    db.commit()
+    db.close()
+    return {"ok": True, "updates": updates}
 
 @app.post("/api/scan-now")
 async def scan_now(request: Request):

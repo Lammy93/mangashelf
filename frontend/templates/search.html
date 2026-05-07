@@ -103,6 +103,10 @@
   .ch-badge{display:inline-block;padding:.12rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600;background:rgba(255,122,53,.12);color:var(--accent2);margin-left:.3rem;}
   .genre-badge{display:inline-block;padding:.12rem .4rem;border-radius:4px;font-size:.6rem;font-weight:600;background:rgba(122,122,140,.12);color:var(--muted);margin-right:.3rem;margin-top:.3rem;}
   .result-genres{display:flex;flex-wrap:wrap;gap:0;margin-bottom:.4rem;}
+  .follow-btn{padding:.3rem .6rem;border-radius:5px;font-size:.7rem;font-weight:600;cursor:pointer;border:none;font-family:inherit;background:var(--accent);color:#fff;transition:background .2s;white-space:nowrap;}
+  .follow-btn:hover{background:#c93530;}
+  .follow-btn.following{background:var(--surface);color:var(--accent);border:1px solid var(--accent);}
+  .follow-btn.following:hover{background:#5c2a2a;color:#fff;}
   .meta-row{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:.82rem;}
   .meta-row:last-child{border-bottom:none;}
   .meta-label{color:var(--muted);font-weight:500;}
@@ -140,8 +144,16 @@
   </div>
   <nav id="sidebar-nav">
     <a href="/" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      <span>Home</span>
+    </a>
+    <a href="/library" class="nav-item">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
-      <span>Library</span>
+      <span>All Manga</span>
+    </a>
+    <a href="/favorites" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+      <span>Favorites</span>
     </a>
     <a href="/search" class="nav-item active">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
@@ -278,6 +290,8 @@ async function doSearch() {
     const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
     const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
     const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
+    const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source);
+    const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
     return `
     <div class="result-card" onclick="openManga(${i},'${srcType}')">
       <div class="result-cover"><img src="${coverUrl}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
@@ -285,7 +299,7 @@ async function doSearch() {
         <div class="result-title">${m.title}</div>
         <div class="result-meta">${m.status||'unknown'} ${chInfo}</div>
         <div class="result-genres">${genres}</div>
-        <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${srcType}')">View Details</button>
+        ${isDownloadSource ? `<button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${srcType}')">View Details</button>` : `<button class="follow-btn${isFollowed?' following':''}" style="width:100%;margin-bottom:.3rem;" onclick="event.stopPropagation();toggleFollow(${i},'${m.source}','${m.id.replace(/'/g,"\\'")}','${m.title.replace(/'/g,"\\'")}','${(m.cover||'').replace(/'/g,"\\'")}',${m.chapters||0})">${isFollowed?'✓ Following':'+ Follow'}</button><button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${srcType}')">View Details</button>`}
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -326,6 +340,8 @@ async function searchAll() {
         const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
         const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
         const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
+        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source);
+        const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
         return `
         <div class="result-card" onclick="openManga(${i},'${src}')">
           <div class="result-cover"><img src="${coverUrl}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
@@ -333,7 +349,7 @@ async function searchAll() {
             <div class="result-title">${m.title}</div>
             <div class="result-meta">${m.status||'unknown'} ${chInfo}</div>
             <div class="result-genres">${genres}</div>
-            <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${src}')">View Details</button>
+            ${isDownloadSource ? `<button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${src}')">View Details</button>` : `<button class="follow-btn${isFollowed?' following':''}" style="width:100%;margin-bottom:.3rem;" onclick="event.stopPropagation();toggleFollow(${i},'${m.source}','${m.id.replace(/'/g,"\\'")}','${m.title.replace(/'/g,"\\'")}','${(m.cover||'').replace(/'/g,"\\'")}',${m.chapters||0})">${isFollowed?'✓ Following':'+ Follow'}</button><button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${src}')">View Details</button>`}
           </div>
         </div>`;
       }).join('')}</div>
@@ -466,6 +482,52 @@ function closeModal() {
   document.body.style.overflow = '';
 }
 
+async function loadFollowed() {
+  try {
+    const res = await fetch('/api/followed');
+    const data = await res.json();
+    window._followedIds = data.map(f => `${f.source}::${f.source_id}`);
+    window._followedMap = {};
+    data.forEach(f => { window._followedMap[`${f.source}::${f.source_id}`] = f.id; });
+  } catch (e) { console.error('Failed to load followed:', e); }
+}
+
+async function toggleFollow(idx, source, sourceId, title, cover, chapters) {
+  const key = `${source}::${sourceId}`;
+  const isFollowed = window._followedIds && window._followedIds.includes(key);
+  if (isFollowed) {
+    const followId = window._followedMap[key];
+    const res = await fetch(`/api/unfollow/${followId}`, { method: 'POST' });
+    if (res.ok) {
+      window._followedIds = window._followedIds.filter(k => k !== key);
+      delete window._followedMap[key];
+    }
+  } else {
+    const res = await fetch('/api/follow', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, source_id: sourceId, title, cover, chapters })
+    });
+    if (res.ok) {
+      if (!window._followedIds) window._followedIds = [];
+      window._followedIds.push(key);
+      const followedRes = await fetch('/api/followed');
+      const followedData = await followedRes.json();
+      const newItem = followedData.find(f => f.source === source && f.source_id === sourceId);
+      if (newItem) window._followedMap[key] = newItem.id;
+    }
+  }
+  const btns = document.querySelectorAll('.follow-btn');
+  btns.forEach(btn => {
+    const onclick = btn.getAttribute('onclick');
+    if (onclick && onclick.includes(`'${source}'`) && onclick.includes(`'${sourceId}'`)) {
+      const nowFollowed = window._followedIds.includes(key);
+      btn.className = `follow-btn${nowFollowed ? ' following' : ''}`;
+      btn.textContent = nowFollowed ? '✓ Following' : '+ Follow';
+    }
+  });
+}
+
+loadFollowed();
 loadSources();
 </script>
 </body>

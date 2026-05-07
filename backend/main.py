@@ -36,6 +36,9 @@ MANGA_DIR = Path("/manga")
 DB_PATH = Path("/data/manga.db")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+from concurrent.futures import ThreadPoolExecutor
+_background_pool = ThreadPoolExecutor(max_workers=4)
+
 class LRUCache:
     def __init__(self, maxsize=128, ttl=60):
         self.maxsize = maxsize
@@ -552,14 +555,17 @@ def extract_metadata(file_path: Path) -> dict:
                             if el is not None and el.text:
                                 meta[tag.lower()] = el.text.strip()
         elif suffix == '.pdf':
-            doc = fitz.open(str(file_path))
-            pdf_meta = doc.metadata
-            if pdf_meta:
-                if pdf_meta.get('author'):
-                    meta['writer'] = pdf_meta['author']
-                if pdf_meta.get('title'):
-                    meta['series'] = pdf_meta['title']
-                doc.close()
+            try:
+                doc = fitz.open(str(file_path))
+                pdf_meta = doc.metadata
+                if pdf_meta:
+                    if pdf_meta.get('author'):
+                        meta['writer'] = pdf_meta['author']
+                    if pdf_meta.get('title'):
+                        meta['series'] = pdf_meta['title']
+                    doc.close()
+            except:
+                pass
     except:
         pass
 
@@ -586,10 +592,14 @@ def extract_pages(file_path: Path) -> List[str]:
             for img in imgs:
                 r.extract(img, out_dir)
     elif suffix == '.pdf':
-        doc = fitz.open(str(file_path))
-        for i, page in enumerate(doc):
-            pix = page.get_pixmap(dpi=150)
-            pix.save(str(out_dir / f"page_{i:04d}.png"))
+        try:
+            doc = fitz.open(str(file_path))
+            for i, page in enumerate(doc):
+                pix = page.get_pixmap(dpi=150)
+                pix.save(str(out_dir / f"page_{i:04d}.png"))
+            doc.close()
+        except Exception as e:
+            logger.warning(f"[pages] PDF error for {file_path.name}: {e}
 
     pages = sorted([f for f in out_dir.iterdir() if f.suffix in {'.jpg','.jpeg','.png','.webp','.gif'}])
     return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
@@ -598,34 +608,98 @@ def scan_manga_dir():
     """Scan all configured manga directories and update database."""
     directories = get_manga_directories()
     _set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
-    all_items = []
-    for dir_conf in directories:
-        scan_path = Path(dir_conf["path"])
-        if not scan_path.exists():
-            continue
-        for item in scan_path.iterdir():
-            if item.is_dir() or item.suffix.lower() in SUPPORTED_FORMATS:
-                all_items.append((scan_path, item))
-    _set_scan_progress(total=len(all_items), message="Scanning...")
-    db = get_db()
-    new_manga_for_meta = []
-    for scan_path, item in all_items:
-        if item.is_dir():
-            manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-            existing = db.execute("SELECT id, slug FROM manga WHERE path=?", (str(item),)).fetchone()
-            if not existing:
-                chapters = []
-                for f in sorted(item.iterdir()):
-                    if f.suffix.lower() in SUPPORTED_FORMATS:
-                        chapters.append(f)
-                if chapters:
-                    nfo = read_nfo(item)
-                    if nfo and nfo.get("title"):
-                        meta = nfo
-                    else:
-                        meta = {}
-                    db.execute(
-    """
+    try:
+        all_items = []
+        for dir_conf in directories:
+            scan_path = Path(dir_conf["path"])
+            if not scan_path.exists():
+                continue
+            for item in scan_path.iterdir():
+                if item.is_dir() or item.suffix.lower() in SUPPORTED_FORMATS:
+                    all_items.append((scan_path, item))
+        _set_scan_progress(total=len(all_items), message="Scanning...")
+        db = get_db()
+        new_manga_for_meta = []
+        for scan_path, item in all_items:
+            if item.is_dir():
+                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                existing = db.execute("SELECT id, slug FROM manga WHERE path=?", (str(item),)).fetchone()
+                if not existing:
+                    chapters = []
+                    for f in sorted(item.iterdir()):
+                        if f.suffix.lower() in SUPPORTED_FORMATS:
+                            chapters.append(f)
+                    if chapters:
+                        nfo = read_nfo(item)
+                        if nfo and nfo.get("title"):
+                            meta = nfo
+                        else:
+                            meta = {}
+                        db.execute(
+        """
+            INSERT OR IGNORE INTO manga (
+                id,
+                title,
+                slug,
+                path,
+                cover,
+                total_chapters,
+                last_read_chapter,
+                last_read_page,
+                reading_mode,
+                source,
+                source_id,
+                added_at,
+                updated_at,
+                status,
+                author,
+                artist,
+                genre,
+                summary,
+                publisher,
+                year
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                manga_id,
+                meta.get('title') or meta.get('series') or item.name,
+                slugify(meta.get('title') or meta.get('series') or item.name),
+                str(item),
+                meta.get('cover'),
+                meta.get('total_chapters') or len(chapters),
+                0,
+                0,
+                'single',
+                meta.get('source'),
+                meta.get('source_id'),
+                datetime.now().isoformat(),
+                datetime.now().isoformat(),
+                meta.get('status') or 'local',
+                meta.get('author') or meta.get('writer'),
+                meta.get('artist') or meta.get('penciller'),
+                meta.get('genre'),
+                meta.get('summary'),
+                meta.get('publisher'),
+                meta.get('year')
+            )
+        )
+                        for i, ch in enumerate(chapters):
+                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                            ch_num = float(i + 1)
+                            db.execute(
+                                "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None)
+                            )
+                        title = meta.get('title') or meta.get('series') or item.name
+                        _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
+                        if not nfo or not nfo.get("title") or not nfo.get("author"):
+                            new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
+            elif item.suffix.lower() in SUPPORTED_FORMATS:
+                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
+                if not existing:
+                    meta = {}
+                    db.execute("""
         INSERT OR IGNORE INTO manga (
             id,
             title,
@@ -648,108 +722,50 @@ def scan_manga_dir():
             publisher,
             year
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
+        """, (
             manga_id,
-            meta.get('title') or meta.get('series') or item.name,
-            slugify(meta.get('title') or meta.get('series') or item.name),
+            item.stem,
+            slugify(item.stem),
             str(item),
-            meta.get('cover'),
-            meta.get('total_chapters') or len(chapters),
+            None,
+            1,
             0,
             0,
             'single',
-            meta.get('source'),
-            meta.get('source_id'),
+            None,
+            None,
             datetime.now().isoformat(),
             datetime.now().isoformat(),
-            meta.get('status') or 'local',
-            meta.get('author') or meta.get('writer'),
-            meta.get('artist') or meta.get('penciller'),
-            meta.get('genre'),
-            meta.get('summary'),
-            meta.get('publisher'),
-            meta.get('year')
-        )
-    )
-                    for i, ch in enumerate(chapters):
-                        ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
-                        ch_num = float(i + 1)
-                        db.execute(
-                            "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                            (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None)
-                        )
-                    title = meta.get('title') or meta.get('series') or item.name
-                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
-                    if not nfo or not nfo.get("title") or not nfo.get("author"):
-                        new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
-        elif item.suffix.lower() in SUPPORTED_FORMATS:
-            manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-            existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
-            if not existing:
-                meta = {}
-                db.execute("""
-INSERT OR IGNORE INTO manga (
-    id,
-    title,
-    slug,
-    path,
-    cover,
-    total_chapters,
-    last_read_chapter,
-    last_read_page,
-    reading_mode,
-    source,
-    source_id,
-    added_at,
-    updated_at,
-    status,
-    author,
-    artist,
-    genre,
-    summary,
-    publisher,
-    year
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""", (
-    manga_id,
-    item.stem,
-    slugify(item.stem),
-    str(item),
-    None,
-    1,
-    0,
-    0,
-    'single',
-    None,
-    None,
-    datetime.now().isoformat(),
-    datetime.now().isoformat(),
-    'local',
-    None,
-    None,
-    None,
-    None,
-    None,
-    None
-))
-                ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-                db.execute(
-                    "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
-                )
-                _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
-                new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
-        _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
-    db.commit()
-    db.close()
-    new_count = len(_scan_progress["new_manga"])
-    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series. Fetching metadata..." if new_count else "Scan complete. No new series.")
-    for nm in new_manga_for_meta:
-        threading.Thread(target=auto_fetch_metadata, args=(nm["id"], nm["path"], nm["title"]), daemon=True).start()
-    for nm in _scan_progress["new_manga"]:
-        threading.Thread(target=pre_extract_pages, args=(nm["id"],), daemon=True).start()
-    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
+            'local',
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ))
+                    ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                    db.execute(
+                        "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
+                    )
+                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
+                    new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
+            _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
+        db.commit()
+        db.close()
+        new_count = len(_scan_progress["new_manga"])
+        _set_scan_progress(message=f"Scan complete. Found {new_count} new series. Post-processing...")
+        for nm in new_manga_for_meta:
+            _background_pool.submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
+        for nm in _scan_progress["new_manga"]:
+            _background_pool.submit(pre_extract_pages, nm["id"])
+        _set_scan_progress(message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
+    except Exception as e:
+        logger.error(f"[scan] Failed: {e}")
+        _set_scan_progress(message=f"Scan failed: {e}")
+    finally:
+        _set_scan_progress(running=False)
 
 def pre_extract_pages(manga_id: str):
     """Pre-extract pages for all chapters of a manga in background."""

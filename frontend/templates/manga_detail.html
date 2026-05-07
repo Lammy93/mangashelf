@@ -359,7 +359,7 @@ async function autoFetchMetadataIfMissing() {
   const source = best.source;
   const params = new URLSearchParams({source, external_id: best.id});
   if (best.cover) params.set('cover', best.cover);
-  await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`, {method:'PUT'});
+  await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`);
   load();
 }
 
@@ -421,6 +421,7 @@ async function saveEdit() {
     document.getElementById('edit-status').textContent = 'Save failed';
   }
 }
+load();
 </script>
 </body>
 </html>

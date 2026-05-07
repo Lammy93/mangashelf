@@ -23,8 +23,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     unrar-free \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -g 100 appgroup \
-    && useradd --create-home --uid 99 --gid appgroup appuser
+    && useradd --create-home appuser
 
 WORKDIR /app
 

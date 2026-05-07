@@ -9,7 +9,7 @@ from typing import Optional, List
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 import xml.etree.ElementTree as ET
-import os, json, zipfile, rarfile, fitz, shutil, asyncio, aiohttp, uuid, base64, hmac, threading, time
+import os, json, zipfile, rarfile, fitz, shutil, asyncio, aiohttp, uuid, base64, hmac, threading, time, re
 from pathlib import Path
 from datetime import datetime
 import sqlite3
@@ -17,6 +17,12 @@ import hashlib
 from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def slugify(text: str) -> str:
+    s = text.lower().strip()
+    s = re.sub(r'[^\w\s-]', '', s)
+    s = re.sub(r'[-\s]+', '-', s)
+    return s[:80]
 
 def hash_password(pw):
     return pwd_context.hash(pw)
@@ -261,6 +267,7 @@ def migrate_db():
     add_col("users", "avatar", "TEXT", "NULL")
     add_col("users", "display_name", "TEXT", "NULL")
     add_col("chapters", "volume_id", "TEXT", "NULL")
+    add_col("manga", "slug", "TEXT", "NULL")
     db.commit()
     db.close()
 
@@ -605,7 +612,7 @@ def scan_manga_dir():
     for scan_path, item in all_items:
         if item.is_dir():
             manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-            existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
+            existing = db.execute("SELECT id, slug FROM manga WHERE path=?", (str(item),)).fetchone()
             if not existing:
                 chapters = []
                 for f in sorted(item.iterdir()):

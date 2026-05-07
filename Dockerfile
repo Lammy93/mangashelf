@@ -30,7 +30,8 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app \
+    && mkdir -p /data && chown appuser:appuser /data
 
 USER appuser
 

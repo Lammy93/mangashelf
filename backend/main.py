@@ -337,19 +337,12 @@ def scan_manga_dir():
                 manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
                 if not existing:
-                    cover = None
                     chapters = []
                     for f in sorted(item.iterdir()):
                         if f.suffix.lower() in SUPPORTED_FORMATS:
                             chapters.append(f)
                     if chapters:
-                        try:
-                            pages = extract_pages(chapters[0])
-                            if pages:
-                                cover = pages[0]
-                        except:
-                            pass
-                    db.execute(
+                        db.execute(
     """
     INSERT OR IGNORE INTO manga (
         id,
@@ -371,7 +364,7 @@ def scan_manga_dir():
         manga_id,
         item.name,
         str(item),
-        cover,
+        None,
         len(chapters),
         0,
         0,
@@ -383,21 +376,16 @@ def scan_manga_dir():
         'local'
     )
 )
-                for i, ch in enumerate(chapters):
-                    ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
-                    db.execute(
-                        "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
-                        (ch_id, manga_id, float(i+1), ch.stem, str(ch), 0, 0, 0, None, 1)
-                    )
+                        for i, ch in enumerate(chapters):
+                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                            db.execute(
+                                "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                (ch_id, manga_id, float(i+1), ch.stem, str(ch), 0, 0, 0, None, 1)
+                            )
             elif item.suffix.lower() in SUPPORTED_FORMATS:
                 manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
                 if not existing:
-                    try:
-                        pages = extract_pages(item)
-                        cover = pages[0] if pages else None
-                    except:
-                        cover = None
                     db.execute("""
 INSERT OR IGNORE INTO manga (
     id,
@@ -418,7 +406,7 @@ INSERT OR IGNORE INTO manga (
     manga_id,
     item.stem,
     str(item),
-    cover,
+    None,
     1,
     0,
     0,
@@ -546,7 +534,6 @@ async def search_page(request: Request):
 
 @app.get("/api/library")
 async def get_library(q: str = ""):
-    scan_manga_dir()
     db = get_db()
     if q:
         rows = db.execute("SELECT * FROM manga WHERE title LIKE ? ORDER BY title", (f"%{q}%",)).fetchall()
@@ -572,7 +559,6 @@ async def get_continue_reading():
 
 @app.get("/api/recently-added")
 async def get_recently_added():
-    scan_manga_dir()
     db = get_db()
     rows = db.execute("SELECT * FROM manga ORDER BY added_at DESC LIMIT 8").fetchall()
     db.close()

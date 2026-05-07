@@ -97,6 +97,17 @@
   .ch-read-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);}
   .scrape-cover-btn{padding:.3rem .6rem;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.72rem;cursor:pointer;font-family:inherit;transition:all .2s;}
   .scrape-cover-btn:hover{border-color:var(--accent2);color:var(--accent2);}
+  .meta-search{padding:.5rem 0;}
+  .meta-search-row{display:flex;gap:.75rem;margin-bottom:1.25rem;}
+  .meta-search-row select{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:.5rem .9rem;font-size:.85rem;font-family:inherit;outline:none;}
+  .meta-result{display:flex;align-items:center;gap:1rem;padding:.75rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem;}
+  .meta-result img{width:50px;height:75px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surface);}
+  .meta-result-info{flex:1;min-width:0;}
+  .meta-result-title{font-size:.85rem;font-weight:600;margin-bottom:.2rem;}
+  .meta-result-meta{font-size:.72rem;color:var(--muted);}
+  .meta-apply-btn{padding:.35rem .7rem;border-radius:5px;border:none;background:var(--accent);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .2s;}
+  .meta-apply-btn:hover{background:#c93530;}
+  .meta-apply-btn.applied{background:#2a5c2a;color:#7de87d;cursor:default;}
 
   @media (max-width: 768px) {
     #sidebar{transform:translateX(-100%);width:var(--sidebar-w) !important;}
@@ -131,6 +142,10 @@
     <a href="/sources" class="nav-item">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
       <span>Sources</span>
+    </a>
+    <a href="/settings" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+      <span>Settings</span>
     </a>
     {% if user and user.role == 'admin' %}
     <a href="/admin" class="nav-item">
@@ -168,6 +183,7 @@
     <div class="tabs">
       <div class="tab active" onclick="switchTab('volumes')">Volumes</div>
       <div class="tab" onclick="switchTab('chapters')">All Chapters</div>
+      <div class="tab" onclick="switchTab('metadata')">Metadata</div>
     </div>
 
     <div class="tab-content active" id="tab-volumes">
@@ -176,6 +192,18 @@
     </div>
     <div class="tab-content" id="tab-chapters">
       <div class="chapter-list" id="all-chapters"></div>
+    </div>
+    <div class="tab-content" id="tab-metadata">
+      <div class="meta-search">
+        <div class="meta-search-row">
+          <select id="meta-source">
+            <option value="anilist">AniList</option>
+            <option value="myanimelist">MyAnimeList</option>
+          </select>
+          <button class="btn btn-ghost" onclick="searchMetadata()">Search</button>
+        </div>
+        <div id="meta-results"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -304,8 +332,10 @@ function chaptersHtml(chapters) {
 }
 
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i === (tab==='volumes'?0:1)));
-  document.querySelectorAll('.tab-content').forEach((c,i) => c.classList.toggle('active', i === (tab==='volumes'?0:1)));
+  const tabs = ['volumes', 'chapters', 'metadata'];
+  const idx = tabs.indexOf(tab);
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i === idx));
+  document.querySelectorAll('.tab-content').forEach((c,i) => c.classList.toggle('active', i === idx));
 }
 
 async function readFirst() {
@@ -316,6 +346,39 @@ async function readFirst() {
 async function scrapeCover() {
   await fetch(`/api/manga/${MANGA_ID}/scrape-cover`, {method:'POST'});
   setTimeout(load, 3000);
+}
+
+async function searchMetadata() {
+  const source = document.getElementById('meta-source').value;
+  document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">Searching…</div>';
+  const res = await fetch(`/api/manga/${MANGA_ID}/find-metadata?source=${source}`);
+  const results = await res.json();
+  if (!results.length) {
+    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No matches found.</div>';
+    return;
+  }
+  document.getElementById('meta-results').innerHTML = results.map(r => `
+    <div class="meta-result" id="meta-${r.id}">
+      <img src="${r.cover||''}" alt="${r.title}" onerror="this.style.display='none'">
+      <div class="meta-result-info">
+        <div class="meta-result-title">${r.title}</div>
+        <div class="meta-result-meta">${r.status||''} ${r.chapters ? '• '+r.chapters+' ch' : ''} ${r.format ? '• '+r.format : ''}</div>
+      </div>
+      <button class="meta-apply-btn" onclick="applyMetadata('${r.id}','${source}',this)">Apply</button>
+    </div>
+  `).join('');
+}
+
+async function applyMetadata(externalId, source, btn) {
+  btn.textContent = 'Applying…'; btn.disabled = true;
+  const res = await fetch(`/api/manga/${MANGA_ID}/metadata?source=${source}&external_id=${externalId}`);
+  const result = await res.json();
+  if (result.ok) {
+    btn.textContent = '✓ Applied'; btn.className = 'meta-apply-btn applied';
+    setTimeout(load, 1500);
+  } else {
+    btn.textContent = 'Failed'; btn.disabled = false;
+  }
 }
 
 load();

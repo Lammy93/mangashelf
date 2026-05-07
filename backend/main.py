@@ -141,6 +141,18 @@ def init_db():
         );
         INSERT OR IGNORE INTO sources VALUES ('mangadex','MangaDex','https://api.mangadex.org','mangadex',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangasee','MangaSee','https://mangasee123.com','mangasee',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','anilist',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','myanimelist',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('comix','Comix','https://comix.com','comix',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangafire','MangaFire','https://mangafire.to','mangafire',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangaball','Mangaball HUB','https://mangaballhub.com','mangaball',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('atsumaru','Atsumaru','https://atsumaru.app','atsumaru',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('weebcentral','Weeb Central','https://weebcentral.com','weebcentral',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangago','Mangago','https://www.mangago.me','mangago',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangadotnet','Mangadotnet','https://manga.dotnet.vn','mangadotnet',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('bookwalker','Bookwalker','https://global.bookwalker.jp','bookwalker',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('rakuten','Rakuten Kobo','https://www.kobo.com','rakuten',0,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('vymanga','VyManga','https://www.vymanga.com','vymanga',0,datetime('now'));
         """)
 
 init_db()
@@ -192,7 +204,7 @@ def is_first_launch():
 SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
 
 def create_session_token(user_id: str, username: str, role: str, display_name: str = None, avatar: str = None) -> str:
-    payload = base64.b64encode(json.dumps({"uid": user_id, "user": username, "role": role, "display_name": display_name, "avatar": avatar}).encode()).decode()
+    payload = base64.b64encode(json.dumps({"uid": user_id, "username": username, "role": role, "display_name": display_name, "avatar": avatar}).encode()).decode()
     sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
@@ -629,6 +641,13 @@ async def admin_page(request: Request):
     user = require_admin(request)
     return templates.TemplateResponse("admin.html", {"request": request, "user": user})
 
+@app.get("/settings")
+async def settings_page(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("settings.html", {"request": request, "user": user})
+
 @app.get("/read/{manga_id}/{chapter_id}")
 async def reader(request: Request, manga_id: str, chapter_id: str):
     user = await get_current_user(request)
@@ -766,7 +785,7 @@ async def toggle_scan_directory(dir_id: str, request: Request):
 @app.post("/api/scan-now")
 async def scan_now(request: Request):
     require_admin(request)
-    scan_manga_dir()
+    threading.Thread(target=scan_manga_dir, daemon=True).start()
     return {"ok": True}
 
 @app.post("/api/scrape-all-covers")
@@ -1028,7 +1047,7 @@ async def toggle_source(source_id: str):
     db.close()
     return {"ok": True}
 
-# ── Routes: API: Search (MangaDex) ────────────────────────────────────────────
+# ── Routes: API: Search ───────────────────────────────────────────────────────
 
 @app.get("/api/search")
 async def search_manga(q: str, source: str = "mangadex"):
@@ -1055,9 +1074,152 @@ async def search_manga(q: str, source: str = "mangadex"):
                 "description": next(iter(attr.get("description", {}).values()), "")[:200]
             })
         return results
+
+    if source == "anilist":
+        query = """
+        query($search: String, $type: MediaType) {
+          Page(perPage: 20) {
+            media(search: $search, type: $type, isAdult: false) {
+              id
+              title { romaji english native }
+              coverImage { large medium }
+              status
+              description(asHtml: false)
+              chapters
+              genres
+              format
+            }
+          }
+        }"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": q, "type": "MANGA"}}
+            ) as resp:
+                data = await resp.json()
+        results = []
+        for m in data.get("data", {}).get("Page", {}).get("media", []):
+            title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or "Unknown"
+            cover = m.get("coverImage", {}).get("large") or m.get("coverImage", {}).get("medium")
+            results.append({
+                "id": str(m["id"]),
+                "title": title,
+                "cover": cover,
+                "status": m.get("status", "").upper() if m.get("status") else None,
+                "source": "anilist",
+                "description": (m.get("description") or "")[:200] if m.get("description") else "",
+                "chapters": m.get("chapters"),
+                "genres": m.get("genres", [])
+            })
+        return results
+
+    if source == "myanimelist":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.jikan.moe/v4/manga?q={q}&limit=20&sfw=true"
+            async with session.get(url) as resp:
+                data = await resp.json()
+        results = []
+        for m in data.get("data", []):
+            results.append({
+                "id": str(m["mal_id"]),
+                "title": m.get("title") or m.get("title_english") or "Unknown",
+                "cover": m.get("images", {}).get("jpg", {}).get("large_image_url") or m.get("images", {}).get("jpg", {}).get("image_url"),
+                "status": m.get("status", "").upper() if m.get("status") else None,
+                "source": "myanimelist",
+                "description": (m.get("synopsis") or "")[:200] if m.get("synopsis") else "",
+                "chapters": m.get("chapters"),
+                "genres": [g["name"] for g in m.get("genres", [])]
+            })
+        return results
     return []
 
-@app.get("/api/manga-source/{source}/{manga_id}/chapters")
+@app.get("/api/search-all")
+async def search_all_sources(q: str):
+    async def search_source(source_id, source_type):
+        try:
+            if source_type == "mangadex":
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://api.mangadex.org/manga?title={q}&limit=5&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive"
+                    async with session.get(url) as resp:
+                        data = await resp.json()
+                results = []
+                for m in data.get("data", []):
+                    attr = m["attributes"]
+                    title = attr["title"].get("en") or next(iter(attr["title"].values()), "Unknown")
+                    cover_rel = next((r for r in m["relationships"] if r["type"] == "cover_art"), None)
+                    cover = None
+                    if cover_rel and cover_rel.get("attributes"):
+                        fname = cover_rel["attributes"]["fileName"]
+                        cover = f"https://uploads.mangadex.org/covers/{m['id']}/{fname}.256.jpg"
+                    results.append({
+                        "id": m["id"], "title": title, "cover": cover,
+                        "status": attr.get("status"), "source": source_id,
+                        "description": next(iter(attr.get("description", {}).values()), "")[:200]
+                    })
+                return results
+
+            if source_type == "anilist":
+                query = """
+                query($search: String, $type: MediaType) {
+                  Page(perPage: 5) {
+                    media(search: $search, type: $type, isAdult: false) {
+                      id title { romaji english native } coverImage { large medium }
+                      status description(asHtml: false) chapters genres format
+                    }
+                  }
+                }"""
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        "https://graphql.anilist.co",
+                        json={"query": query, "variables": {"search": q, "type": "MANGA"}}
+                    ) as resp:
+                        data = await resp.json()
+                results = []
+                for m in data.get("data", {}).get("Page", {}).get("media", []):
+                    title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or "Unknown"
+                    cover = m.get("coverImage", {}).get("large") or m.get("coverImage", {}).get("medium")
+                    results.append({
+                        "id": str(m["id"]), "title": title, "cover": cover,
+                        "status": m.get("status", "").upper() if m.get("status") else None,
+                        "source": source_id,
+                        "description": (m.get("description") or "")[:200] if m.get("description") else "",
+                        "chapters": m.get("chapters"), "genres": m.get("genres", []), "format": m.get("format")
+                    })
+                return results
+
+            if source_type == "myanimelist":
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://api.jikan.moe/v4/manga?q={q}&limit=5&sfw=true"
+                    async with session.get(url) as resp:
+                        data = await resp.json()
+                results = []
+                for m in data.get("data", []):
+                    results.append({
+                        "id": str(m["mal_id"]),
+                        "title": m.get("title") or m.get("title_english") or "Unknown",
+                        "cover": m.get("images", {}).get("jpg", {}).get("large_image_url") or m.get("images", {}).get("jpg", {}).get("image_url"),
+                        "status": m.get("status", "").upper() if m.get("status") else None,
+                        "source": source_id,
+                        "description": (m.get("synopsis") or "")[:200] if m.get("synopsis") else "",
+                        "chapters": m.get("chapters"), "genres": [g["name"] for g in m.get("genres", [])]
+                    })
+                return results
+            return []
+        except:
+            return []
+
+    db = get_db()
+    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','anilist','myanimelist')").fetchall()
+    db.close()
+
+    tasks = [search_source(r["id"], r["type"]) for r in rows]
+    all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    merged = []
+    for result in all_results:
+        if isinstance(result, list):
+            merged.extend(result)
+    return merged
 async def get_source_chapters(source: str, manga_id: str):
     if source == "mangadex":
         async with aiohttp.ClientSession() as session:
@@ -1075,6 +1237,188 @@ async def get_source_chapters(source: str, manga_id: str):
                 "source": "mangadex"
             })
         return chapters
+
+    if source == "anilist":
+        return []
+
+    if source == "myanimelist":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.jikan.moe/v4/manga/{manga_id}"
+            async with session.get(url) as resp:
+                data = await resp.json()
+        m = data.get("data", {})
+        return [{
+            "id": "info",
+            "chapter": "1",
+            "title": f"{m.get('title', '')} — Ch.1–{m.get('chapters', '?')}",
+            "pages": 0,
+            "source": "myanimelist",
+            "metadata": {
+                "score": m.get("score"),
+                "scored_by": m.get("scored_by"),
+                "rank": m.get("rank"),
+                "popularity": m.get("popularity"),
+                "members": m.get("members"),
+                "favorites": m.get("favorites"),
+                "volumes": m.get("volumes"),
+                "chapters": m.get("chapters"),
+                "status": m.get("status"),
+                "published": m.get("published", {}).get("string"),
+                "authors": [a["name"] for a in m.get("authors", [])],
+                "genres": [g["name"] for g in m.get("genres", [])],
+                "themes": [t["name"] for t in m.get("themes", [])],
+                "serialization": [s["name"] for s in m.get("serialization", [])]
+            }
+        }]
+    return []
+
+@app.get("/api/manga/{manga_id}/metadata")
+async def get_external_metadata(manga_id: str, source: str = "anilist", external_id: str = ""):
+    db = get_db()
+    manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+    if not manga:
+        db.close()
+        raise HTTPException(404, "Manga not found")
+
+    if source == "anilist" and external_id:
+        query = """
+        query($id: Int) {
+          Media(id: $id, type: MANGA) {
+            id
+            title { romaji english native }
+            coverImage { large medium }
+            status
+            description(asHtml: false)
+            chapters
+            volumes
+            genres
+            synonyms
+            format
+            startDate { year month day }
+            endDate { year month day }
+            staff { edges { role node { name { full } } } }
+            studios { edges { isMain node { name } } }
+          }
+        }"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"id": int(external_id)}}
+            ) as resp:
+                data = await resp.json()
+        m = data.get("data", {}).get("Media", {})
+        if m:
+            title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or ""
+            authors = [e["node"]["name"]["full"] for e in m.get("staff", {}).get("edges", []) if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
+            db.execute(
+                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, chapters=?, year=?, updated_at=? WHERE id=?",
+                (
+                    title,
+                    authors[0] if authors else manga["author"],
+                    authors[1] if len(authors) > 1 else manga["artist"],
+                    ", ".join(m.get("genres", [])),
+                    (m.get("description") or "")[:2000] if m.get("description") else manga["summary"],
+                    m.get("status", "").upper() if m.get("status") else manga["status"],
+                    m.get("chapters") or manga["total_chapters"],
+                    m.get("startDate", {}).get("year") or manga["year"],
+                    datetime.now().isoformat(),
+                    manga_id
+                )
+            )
+            db.commit()
+        db.close()
+        return {"ok": True, "data": m} if m else {"ok": False, "error": "Not found"}
+
+    if source == "myanimelist" and external_id:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.jikan.moe/v4/manga/{external_id}/full"
+            async with session.get(url) as resp:
+                data = await resp.json()
+        m = data.get("data", {})
+        if m:
+            authors = [a["name"] for a in m.get("authors", [])]
+            genres = [g["name"] for g in m.get("genres", [])]
+            db.execute(
+                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, chapters=?, volumes=?, year=?, publisher=?, updated_at=? WHERE id=?",
+                (
+                    m.get("title") or m.get("title_english") or manga["title"],
+                    authors[0] if authors else manga["author"],
+                    authors[1] if len(authors) > 1 else manga["artist"],
+                    ", ".join(genres),
+                    (m.get("synopsis") or "")[:2000] if m.get("synopsis") else manga["summary"],
+                    m.get("status", "").upper() if m.get("status") else manga["status"],
+                    m.get("chapters") or manga["total_chapters"],
+                    m.get("volumes") or None,
+                    m.get("published", {}).get("prop", {}).get("from", {}).get("year") or manga["year"],
+                    (m.get("serialization", [{}])[0].get("name") if m.get("serialization") else manga["publisher"]),
+                    datetime.now().isoformat(),
+                    manga_id
+                )
+            )
+            db.commit()
+        db.close()
+        return {"ok": True, "data": m} if m else {"ok": False, "error": "Not found"}
+
+    db.close()
+    raise HTTPException(400, "Invalid source or missing external_id")
+
+@app.get("/api/manga/{manga_id}/find-metadata")
+async def find_external_metadata(manga_id: str, source: str = "anilist"):
+    db = get_db()
+    manga = db.execute("SELECT title FROM manga WHERE id=?", (manga_id,)).fetchone()
+    db.close()
+    if not manga:
+        raise HTTPException(404, "Manga not found")
+
+    if source == "anilist":
+        query = """
+        query($search: String, $type: MediaType) {
+          Page(perPage: 5) {
+            media(search: $search, type: $type, isAdult: false) {
+              id
+              title { romaji english native }
+              coverImage { medium }
+              status
+              chapters
+              format
+            }
+          }
+        }"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": manga["title"], "type": "MANGA"}}
+            ) as resp:
+                data = await resp.json()
+        results = []
+        for m in data.get("data", {}).get("Page", {}).get("media", []):
+            title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or "Unknown"
+            results.append({
+                "id": str(m["id"]),
+                "title": title,
+                "cover": m.get("coverImage", {}).get("medium"),
+                "status": m.get("status", "").upper() if m.get("status") else None,
+                "chapters": m.get("chapters"),
+                "format": m.get("format")
+            })
+        return results
+
+    if source == "myanimelist":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.jikan.moe/v4/manga?q={manga['title']}&limit=5&sfw=true"
+            async with session.get(url) as resp:
+                data = await resp.json()
+        results = []
+        for m in data.get("data", []):
+            results.append({
+                "id": str(m["mal_id"]),
+                "title": m.get("title") or m.get("title_english") or "Unknown",
+                "cover": m.get("images", {}).get("jpg", {}).get("image_url"),
+                "status": m.get("status", "").upper() if m.get("status") else None,
+                "chapters": m.get("chapters"),
+                "volumes": m.get("volumes")
+            })
+        return results
     return []
 
 # ── Routes: API: Downloads ────────────────────────────────────────────────────

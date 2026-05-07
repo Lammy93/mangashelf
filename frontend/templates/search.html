@@ -99,6 +99,22 @@
   @keyframes spin{to{transform:rotate(360deg);}}
   .empty-search{text-align:center;padding:4rem 1rem;color:var(--muted);}
   .empty-search h3{font-family:'Dela Gothic One',sans-serif;color:var(--text);margin-bottom:.5rem;}
+  .ch-badge{display:inline-block;padding:.12rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600;background:rgba(255,122,53,.12);color:var(--accent2);margin-left:.3rem;}
+  .genre-badge{display:inline-block;padding:.12rem .4rem;border-radius:4px;font-size:.6rem;font-weight:600;background:rgba(122,122,140,.12);color:var(--muted);margin-right:.3rem;margin-top:.3rem;}
+  .result-genres{display:flex;flex-wrap:wrap;gap:0;margin-bottom:.4rem;}
+  .meta-row{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:.82rem;}
+  .meta-row:last-child{border-bottom:none;}
+  .meta-label{color:var(--muted);font-weight:500;}
+  .meta-val{color:var(--text);font-weight:600;text-align:right;max-width:60%;}
+  .source-group{margin-bottom:1.5rem;}
+  .source-group-header{display:flex;align-items:center;gap:.5rem;padding:.5rem 0;border-bottom:1px solid var(--border);margin-bottom:.75rem;}
+  .source-group-header h3{font-family:'Dela Gothic One',sans-serif;font-size:.9rem;}
+  .source-group-count{font-size:.7rem;color:var(--muted);background:var(--surface2);padding:.1rem .4rem;border-radius:4px;}
+  .source-badge-sm{display:inline-block;padding:.12rem .4rem;border-radius:4px;font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;}
+  .source-badge-sm.mangadex{background:rgba(232,64,58,.12);color:var(--accent);}
+  .source-badge-sm.anilist{background:rgba(50,126,213,.12);color:#327ed5;}
+  .source-badge-sm.myanimelist{background:rgba(43,144,220,.12);color:#2b90dc;}
+  #search-all-btn.loading{opacity:.6;pointer-events:none;}
 
   @media (max-width: 768px) {
     #sidebar{transform:translateX(-100%);width:var(--sidebar-w) !important;}
@@ -134,6 +150,10 @@
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
       <span>Sources</span>
     </a>
+    <a href="/settings" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+      <span>Settings</span>
+    </a>
   </nav>
   <div id="sidebar-footer">
     <div class="sidebar-user">
@@ -164,6 +184,7 @@
       <input class="search-input" type="text" id="q" placeholder="Search title…" onkeydown="if(event.key==='Enter')doSearch()">
       <select class="search-input" id="source-sel"></select>
       <button class="btn btn-primary" onclick="doSearch()">Search</button>
+      <button class="btn btn-ghost" id="search-all-btn" onclick="searchAll()">Search All</button>
     </div>
     <div id="results-wrap">
       <div class="empty-search"><h3>Search for manga above</h3><p>Browse MangaDex and your configured sources.</p></div>
@@ -182,12 +203,17 @@
       </div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
-    <div class="chapter-header">
-      <h3 id="chapter-count"></h3>
-      <button class="dl-all-btn" id="dl-all-btn" onclick="downloadAll()">↓ Download All</button>
+    <div id="chapter-section">
+      <div class="chapter-header">
+        <h3 id="chapter-count"></h3>
+        <button class="dl-all-btn" id="dl-all-btn" onclick="downloadAll()">↓ Download All</button>
+      </div>
+      <div class="chapter-list" id="chapter-list">
+        <div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>
+      </div>
     </div>
-    <div class="chapter-list" id="chapter-list">
-      <div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>
+    <div id="metadata-section" style="display:none;padding:1rem;overflow-y:auto;max-height:400px;">
+      <div id="metadata-body"></div>
     </div>
   </div>
 </div>
@@ -241,53 +267,143 @@ async function doSearch() {
     return;
   }
   document.getElementById('results-wrap').innerHTML = `<div class="results-grid">${data.map((m,i)=>{
-    const coverUrl = m.cover ? m.cover.replace('.256.jpg', '.512.jpg') : '';
+    const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
+    const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
+    const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
     return `
-    <div class="result-card" onclick="openManga(${i})">
+    <div class="result-card" onclick="openManga(${i},'${srcType}')">
       <div class="result-cover"><img src="${coverUrl}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
       <div class="result-info">
         <div class="result-title">${m.title}</div>
-        <div class="result-meta">${m.status||'unknown'}</div>
-        <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i})">View Chapters</button>
+        <div class="result-meta">${m.status||'unknown'} ${chInfo}</div>
+        <div class="result-genres">${genres}</div>
+        <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${srcType}')">View Details</button>
       </div>
     </div>`;
   }).join('')}</div>`;
   window._searchResults = data;
 }
 
-async function openManga(idx) {
-  currentResult = window._searchResults[idx];
+async function searchAll() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('search-all-btn');
+  btn.classList.add('loading'); btn.textContent = 'Searching all…';
+  document.getElementById('results-wrap').innerHTML = '<div style="text-align:center;padding:3rem;color:var(--muted);"><div class="spinner" style="width:28px;height:28px;border-width:3px;margin:0 auto 1rem;"></div><br>Searching all sources…</div>';
+  const res = await fetch(`/api/search-all?q=${encodeURIComponent(q)}`);
+  const data = await res.json();
+  btn.classList.remove('loading'); btn.textContent = 'Search All';
+
+  if (!data.length) {
+    document.getElementById('results-wrap').innerHTML = '<div class="empty-search"><h3>No results</h3><p>Try a different search term.</p></div>';
+    return;
+  }
+
+  const grouped = {};
+  data.forEach(m => {
+    const src = m.source;
+    if (!grouped[src]) grouped[src] = [];
+    grouped[src].push(m);
+  });
+
+  const sourceNames = {mangadex:'MangaDex', anilist:'AniList', myanimelist:'MyAnimeList'};
+  let html = '';
+  for (const [src, items] of Object.entries(grouped)) {
+    html += `<div class="source-group">
+      <div class="source-group-header">
+        <span class="source-badge-sm ${src}">${sourceNames[src]||src}</span>
+        <span class="source-group-count">${items.length}</span>
+      </div>
+      <div class="results-grid">${items.map((m,i)=>{
+        const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
+        const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
+        const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
+        return `
+        <div class="result-card" onclick="openManga(${i},'${src}')">
+          <div class="result-cover"><img src="${coverUrl}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
+          <div class="result-info">
+            <div class="result-title">${m.title}</div>
+            <div class="result-meta">${m.status||'unknown'} ${chInfo}</div>
+            <div class="result-genres">${genres}</div>
+            <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i},'${src}')">View Details</button>
+          </div>
+        </div>`;
+      }).join('')}</div>
+    </div>`;
+  }
+  document.getElementById('results-wrap').innerHTML = html;
+  window._searchResults = data;
+  window._groupedResults = grouped;
+}
+
+async function openManga(idx, sourceGroup) {
+  if (sourceGroup && window._groupedResults) {
+    currentResult = window._groupedResults[sourceGroup][idx];
+  } else {
+    currentResult = window._searchResults[idx];
+  }
   document.getElementById('modal-title').textContent = currentResult.title;
   document.getElementById('modal-desc').textContent = currentResult.description || '';
   const coverUrl = currentResult.cover
-    ? currentResult.cover.replace('.256.jpg', '.512.jpg')
+    ? (currentResult.cover.includes('mangadex') ? currentResult.cover.replace('.256.jpg', '.512.jpg') : currentResult.cover)
     : '';
   document.getElementById('modal-img').src = coverUrl;
   document.getElementById('modal-status').textContent = currentResult.status || '';
-  document.getElementById('chapter-count').textContent = 'Loading chapters…';
-  document.getElementById('dl-all-btn').disabled = false;
-  document.getElementById('dl-all-btn').textContent = '↓ Download All';
-  document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>';
-  document.getElementById('modal-overlay').classList.add('open');
+  const isDownloadSource = ['mangadex', 'mangasee'].includes(currentResult.source);
+  document.getElementById('dl-all-btn').style.display = isDownloadSource ? '' : 'none';
 
-  const res = await fetch(`/api/manga-source/${currentResult.source}/${currentResult.id}/chapters`);
-  const chapters = await res.json();
-  if (!chapters.length) {
-    document.getElementById('chapter-count').textContent = 'No chapters found';
-    document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No chapters found.</div>';
-    document.getElementById('dl-all-btn').disabled = true;
-    return;
+  if (isDownloadSource) {
+    document.getElementById('chapter-section').style.display = '';
+    document.getElementById('metadata-section').style.display = 'none';
+    document.getElementById('chapter-count').textContent = 'Loading chapters…';
+    document.getElementById('dl-all-btn').disabled = false;
+    document.getElementById('dl-all-btn').textContent = '↓ Download All';
+    document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>';
+    document.getElementById('modal-overlay').classList.add('open');
+    const res = await fetch(`/api/manga-source/${currentResult.source}/${currentResult.id}/chapters`);
+    const chapters = await res.json();
+    if (!chapters.length) {
+      document.getElementById('chapter-count').textContent = 'No chapters found';
+      document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No chapters found.</div>';
+      document.getElementById('dl-all-btn').disabled = true;
+      return;
+    }
+    document.getElementById('chapter-count').textContent = `${chapters.length} chapters`;
+    window._currentChapters = chapters;
+    document.getElementById('chapter-list').innerHTML = chapters.map(c=>`
+      <div class="chapter-item" id="ch-${c.id}">
+        <div>
+          <div class="ch-name">Chapter ${c.chapter} ${c.title && c.title !== `Chapter ${c.chapter}` ? '— '+c.title : ''}</div>
+          <div class="ch-pages">${c.pages ? c.pages+' pages' : ''}</div>
+        </div>
+        <button class="dl-btn" onclick="downloadChapter('${c.id}','${c.chapter}')">↓ Download</button>
+      </div>`).join('');
+  } else {
+    document.getElementById('chapter-section').style.display = 'none';
+    document.getElementById('metadata-section').style.display = '';
+    document.getElementById('modal-overlay').classList.add('open');
+    const res = await fetch(`/api/manga-source/${currentResult.source}/${currentResult.id}/chapters`);
+    const info = await res.json();
+    if (info.length && info[0].metadata) {
+      const md = info[0].metadata;
+      document.getElementById('metadata-body').innerHTML = `
+        ${md.score ? `<div class="meta-row"><span class="meta-label">Score</span><span class="meta-val">${md.score} (${md.scored_by?.toLocaleString()} users)</span></div>` : ''}
+        ${md.rank ? `<div class="meta-row"><span class="meta-label">Rank</span><span class="meta-val">#${md.rank}</span></div>` : ''}
+        ${md.popularity ? `<div class="meta-row"><span class="meta-label">Popularity</span><span class="meta-val">#${md.popularity}</span></div>` : ''}
+        ${md.members ? `<div class="meta-row"><span class="meta-label">Members</span><span class="meta-val">${md.members.toLocaleString()}</span></div>` : ''}
+        ${md.volumes ? `<div class="meta-row"><span class="meta-label">Volumes</span><span class="meta-val">${md.volumes}</span></div>` : ''}
+        ${md.chapters ? `<div class="meta-row"><span class="meta-label">Chapters</span><span class="meta-val">${md.chapters}</span></div>` : ''}
+        ${md.status ? `<div class="meta-row"><span class="meta-label">Status</span><span class="meta-val">${md.status}</span></div>` : ''}
+        ${md.published ? `<div class="meta-row"><span class="meta-label">Published</span><span class="meta-val">${md.published}</span></div>` : ''}
+        ${md.authors?.length ? `<div class="meta-row"><span class="meta-label">Authors</span><span class="meta-val">${md.authors.join(', ')}</span></div>` : ''}
+        ${md.genres?.length ? `<div class="meta-row"><span class="meta-label">Genres</span><span class="meta-val">${md.genres.join(', ')}</span></div>` : ''}
+        ${md.themes?.length ? `<div class="meta-row"><span class="meta-label">Themes</span><span class="meta-val">${md.themes.join(', ')}</span></div>` : ''}
+        ${md.serialization?.length ? `<div class="meta-row"><span class="meta-label">Serialization</span><span class="meta-val">${md.serialization.join(', ')}</span></div>` : ''}
+      `;
+    } else {
+      document.getElementById('metadata-body').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No metadata available.</div>';
+    }
   }
-  document.getElementById('chapter-count').textContent = `${chapters.length} chapters`;
-  window._currentChapters = chapters;
-  document.getElementById('chapter-list').innerHTML = chapters.map(c=>`
-    <div class="chapter-item" id="ch-${c.id}">
-      <div>
-        <div class="ch-name">Chapter ${c.chapter} ${c.title && c.title !== `Chapter ${c.chapter}` ? '— '+c.title : ''}</div>
-        <div class="ch-pages">${c.pages ? c.pages+' pages' : ''}</div>
-      </div>
-      <button class="dl-btn" onclick="downloadChapter('${c.id}','${c.chapter}')">↓ Download</button>
-    </div>`).join('');
 }
 
 async function downloadChapter(chId, chNum) {

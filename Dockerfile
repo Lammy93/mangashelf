@@ -22,18 +22,14 @@ FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y \
     unrar-free \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home appuser
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
-RUN chown -R appuser:appuser /app \
-    && mkdir -p /data && chown appuser:appuser /data
-
-USER appuser
+RUN mkdir -p /data
 
 EXPOSE 8080
 

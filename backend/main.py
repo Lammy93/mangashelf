@@ -36,8 +36,24 @@ MANGA_DIR = Path("/manga")
 DB_PATH = Path("/data/manga.db")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-from concurrent.futures import ThreadPoolExecutor
-_background_pool = ThreadPoolExecutor(max_workers=4)
+import queue
+_background_queue = queue.Queue()
+def _background_worker():
+    while True:
+        task = _background_queue.get()
+        if task is None:
+            break
+        fn, args = task
+        try:
+            fn(*args)
+        except Exception as e:
+            logger.error(f"[bg] Task failed: {e}")
+        time.sleep(3)
+        _background_queue.task_done()
+threading.Thread(target=_background_worker, daemon=True).start()
+
+def bg_submit(fn, *args):
+    _background_queue.put((fn, args))
 
 class LRUCache:
     def __init__(self, maxsize=128, ttl=60):
@@ -757,9 +773,9 @@ def scan_manga_dir():
         new_count = len(_scan_progress["new_manga"])
         _set_scan_progress(message=f"Scan complete. Found {new_count} new series. Post-processing...")
         for nm in new_manga_for_meta:
-            _background_pool.submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
+            bg_submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
         for nm in _scan_progress["new_manga"]:
-            _background_pool.submit(pre_extract_pages, nm["id"])
+            bg_submit(pre_extract_pages, nm["id"])
         _set_scan_progress(message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
     except Exception as e:
         logger.error(f"[scan] Failed: {e}")

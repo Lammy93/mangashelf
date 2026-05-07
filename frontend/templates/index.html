@@ -94,6 +94,8 @@
   .card-info{padding:.75rem;}
   .card-title{font-size:.82rem;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .card-meta{font-size:.72rem;color:var(--muted);margin-top:.2rem;}
+  .progress-bar{width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
+  .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s;width:0%;}
   .card-edit{position:absolute;top:6px;right:6px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.6);border:none;color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s,background .2s;}
   .card-edit:hover{opacity:1;background:var(--accent);}
   .card-cover:hover .card-edit{opacity:1;}
@@ -238,8 +240,10 @@
     <div class="grid" id="manga-grid"></div>
     <div id="empty-state" style="display:none;">
       <h2>No manga yet</h2>
-      <p>Drop files in your manga folder or use Discover to add new manga.</p><br>
-      <a href="/search" class="btn btn-primary">Browse Sources</a>
+      <p>Drop files in your manga folder or scan your library to get started.</p><br>
+      <button class="btn btn-primary" id="scan-lib-btn" onclick="scanLibrary()">Scan Library Now</button>
+      <div class="progress-bar" id="scan-progress-bar" style="display:none;margin-top:1rem;"><div class="progress-fill" id="scan-progress-fill" style="width:0%"></div></div>
+      <div id="scan-status" style="font-size:.8rem;color:var(--muted);margin-top:.5rem;"></div>
     </div>
   </div>
 </div>
@@ -352,6 +356,31 @@ function renderCard(m) {
 }
 
 function filterLibrary(q) { loadLibrary(q); }
+
+let _scanTimer = null;
+async function scanLibrary() {
+  const btn = document.getElementById('scan-lib-btn');
+  const bar = document.getElementById('scan-progress-bar');
+  const fill = document.getElementById('scan-progress-fill');
+  const status = document.getElementById('scan-status');
+  btn.disabled = true; btn.textContent = 'Scanning...';
+  bar.style.display = 'block'; fill.style.width = '0%'; status.textContent = 'Starting scan...';
+  const res = await fetch('/api/scan-now', {method:'POST'});
+  if (!res.ok) { status.textContent = 'Scan failed.'; btn.disabled = false; btn.textContent = 'Scan Library Now'; return; }
+  if (_scanTimer) clearInterval(_scanTimer);
+  _scanTimer = setInterval(async () => {
+    const pr = await fetch('/api/scan-progress');
+    const p = await pr.json();
+    if (p.total > 0) fill.style.width = Math.round((p.current / p.total) * 100) + '%';
+    status.textContent = p.message;
+    if (!p.running) {
+      clearInterval(_scanTimer);
+      btn.disabled = false; btn.textContent = 'Scan Library Now';
+      setTimeout(() => { bar.style.display = 'none'; status.textContent = ''; }, 5000);
+      loadHome();
+    }
+  }, 500);
+}
 
 async function openEditModal(mangaId) {
   editMangaId = mangaId;

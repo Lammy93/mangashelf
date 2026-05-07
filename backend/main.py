@@ -12,6 +12,15 @@ from pathlib import Path
 from datetime import datetime
 import sqlite3
 import hashlib
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(pw):
+    return pwd_context.hash(pw)
+
+def verify_password(pw, hashed):
+    return pwd_context.verify(pw, hashed)
 
 app = FastAPI(title="MangaShelf")
 
@@ -697,12 +706,3 @@ async def serve_cache(stem: str, filename: str):
         raise HTTPException(404)
     return FR(str(p))
 
-#  ── Password  ────────────────────────────────────────────────────────
-from passlib.context import CryptContext
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def hash_password(pw):
-    return pwd_context.hash(pw)
-
-def verify_password(pw, hashed):
-    return pwd_context.verify(pw, hashed)

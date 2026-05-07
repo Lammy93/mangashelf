@@ -59,6 +59,10 @@
   .status-msg{font-size:.8rem;padding:.5rem .75rem;border-radius:6px;margin-top:.5rem;display:none;}
   .status-msg.success{display:block;background:rgba(74,222,128,.1);color:#4ade80;border:1px solid rgba(74,222,128,.2);}
   .status-msg.error{display:block;background:rgba(232,64,58,.1);color:var(--accent);border:1px solid rgba(232,64,58,.2);}
+  .progress-bar{width:100%;height:6px;background:var(--border);border-radius:3px;margin:.75rem 0;overflow:hidden;display:none;}
+  .progress-bar.active{display:block;}
+  .progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s;width:0%;}
+  .scan-detail{font-size:.75rem;color:var(--muted);margin-top:.25rem;}
 </style>
 </head>
 <body>
@@ -108,10 +112,16 @@
       <div class="toggle-row">
         <div>
           <div class="toggle-label">Auto-scan at interval</div>
-          <div class="toggle-desc">Automatically scan directories every N seconds</div>
+          <div class="toggle-desc">Automatically scan directories on a schedule</div>
         </div>
         <div style="display:flex;align-items:center;gap:.75rem;">
-          <input class="field interval-input" type="number" id="scan-interval" value="300" min="30">
+          <select class="field" id="scan-interval" style="width:100px;flex:none;">
+            <option value="300">5 min</option>
+            <option value="600">10 min</option>
+            <option value="900">15 min</option>
+            <option value="1200">20 min</option>
+            <option value="1800">30 min</option>
+          </select>
           <label class="toggle">
             <input type="checkbox" id="auto-scan-toggle" checked onchange="saveScanSettings()">
             <span class="slider"></span>
@@ -128,8 +138,20 @@
           <span class="slider"></span>
         </label>
       </div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Scan on folder change</div>
+          <div class="toggle-desc">Trigger a full scan when new files/folders are detected</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="folder-change-toggle" checked onchange="saveScanSettings()">
+          <span class="slider"></span>
+        </label>
+      </div>
       <div style="padding:.75rem 0;">
         <button class="btn btn-primary" onclick="scanNow()">⚡ Scan Now</button>
+        <div class="progress-bar" id="scan-progress-bar"><div class="progress-fill" id="scan-progress-fill"></div></div>
+        <div class="scan-detail" id="scan-detail"></div>
         <span id="scan-status" class="status-msg"></span>
       </div>
     </div>
@@ -197,6 +219,7 @@ async function loadScanSettings() {
   document.getElementById('scan-interval').value = s.scan_interval;
   document.getElementById('auto-scan-toggle').checked = s.auto_scan_enabled;
   document.getElementById('watch-toggle').checked = s.watch_enabled;
+  document.getElementById('folder-change-toggle').checked = s.scan_on_folder_change;
   renderDirs(s.directories);
 }
 
@@ -204,22 +227,45 @@ async function saveScanSettings() {
   const interval = parseInt(document.getElementById('scan-interval').value) || 300;
   const auto = document.getElementById('auto-scan-toggle').checked;
   const watch = document.getElementById('watch-toggle').checked;
+  const folderChange = document.getElementById('folder-change-toggle').checked;
   await fetch('/api/scan-settings', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({scan_interval: interval, auto_scan_enabled: auto, watch_enabled: watch})
+    body: JSON.stringify({scan_interval: interval, auto_scan_enabled: auto, watch_enabled: watch, scan_on_folder_change: folderChange})
   });
 }
 
+let _scanInterval = null;
 async function scanNow() {
   const msg = document.getElementById('scan-status');
+  const bar = document.getElementById('scan-progress-bar');
+  const fill = document.getElementById('scan-progress-fill');
+  const detail = document.getElementById('scan-detail');
   msg.className = 'status-msg'; msg.textContent = '';
   const res = await fetch('/api/scan-now', {method:'POST'});
   if (res.ok) {
-    msg.className = 'status-msg success'; msg.textContent = 'Scan started.';
+    bar.classList.add('active');
+    fill.style.width = '0%';
+    detail.textContent = 'Starting scan...';
+    if (_scanInterval) clearInterval(_scanInterval);
+    _scanInterval = setInterval(async () => {
+      const pr = await fetch('/api/scan-progress');
+      const p = await pr.json();
+      if (p.total > 0) {
+        const pct = Math.round((p.current / p.total) * 100);
+        fill.style.width = pct + '%';
+        detail.textContent = p.message;
+      }
+      if (!p.running) {
+        clearInterval(_scanInterval);
+        bar.classList.remove('active');
+        msg.className = 'status-msg success';
+        msg.textContent = p.message;
+        setTimeout(() => { msg.className = 'status-msg'; msg.textContent = ''; detail.textContent = ''; }, 5000);
+      }
+    }, 500);
   } else {
     msg.className = 'status-msg error'; msg.textContent = 'Scan failed.';
   }
-  setTimeout(() => { msg.className = 'status-msg'; msg.textContent = ''; }, 5000);
 }
 
 function renderDirs(dirs) {

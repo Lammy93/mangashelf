@@ -158,13 +158,13 @@
     {% endif %}
   </nav>
   <div id="sidebar-footer">
-    <div class="sidebar-user">
+    <div class="sidebar-user" onclick="window.location='/settings'" style="cursor:pointer;">
       <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
       <div class="user-info">
         <div class="user-name">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
         <div class="user-role">{{ user.role if user else '' }}</div>
       </div>
-      <a href="/logout" class="logout-btn" title="Sign out">
+      <a href="/logout" class="logout-btn" title="Sign out" onclick="event.stopPropagation();">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
       </a>
     </div>
@@ -197,17 +197,7 @@
       <div class="chapter-list" id="all-chapters"></div>
     </div>
     <div class="tab-content" id="tab-metadata">
-      <div class="meta-search">
-        <div class="meta-search-row">
-          <button class="btn btn-ghost" onclick="refreshFromNfo()" title="Re-read mangashelf.xml">Refresh from NFO</button>
-          <select id="meta-source">
-            <option value="anilist">AniList</option>
-            <option value="myanimelist">MyAnimeList</option>
-          </select>
-          <button class="btn btn-ghost" onclick="searchMetadata()">Search</button>
-        </div>
-        <div id="meta-results"></div>
-      </div>
+      <div id="meta-results"></div>
     </div>
   </div>
 </div>
@@ -253,6 +243,9 @@ async function load() {
   } else {
     document.querySelector('.tab[onclick*="volumes"]').textContent = 'Chapters';
     renderVolChapters(null);
+  }
+  if (!data.manga.author || !data.manga.genre || !data.manga.summary) {
+    autoFetchMetadataIfMissing();
   }
 }
 
@@ -353,55 +346,18 @@ async function scrapeCover() {
   setTimeout(load, 3000);
 }
 
-async function refreshFromNfo() {
-  const res = await fetch(`/api/manga/${MANGA_ID}/nfo`);
-  const nfo = await res.json();
-  if (nfo.ok && nfo.data) {
-    await fetch(`/api/manga/${MANGA_ID}/metadata`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(nfo.data)
-    });
-    load();
-    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:1rem;color:var(--success);">Refreshed from NFO & synced to DB.</div>';
-  } else {
-    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:1rem;color:var(--muted);">No NFO file found.</div>';
-  }
-}
-
-async function searchMetadata() {
-  const source = document.getElementById('meta-source').value;
-  document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">Searching…</div>';
-  const res = await fetch(`/api/manga/${MANGA_ID}/find-metadata?source=${source}`);
+async function autoFetchMetadataIfMissing() {
+  const res = await fetch(`/api/search-all?q=${encodeURIComponent(data.manga.title)}`);
   const results = await res.json();
-  if (!results.length) {
-    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No matches found.</div>';
-    return;
-  }
-  document.getElementById('meta-results').innerHTML = results.map(r => `
-    <div class="meta-result" id="meta-${r.id}">
-      <img src="${r.cover||''}" alt="${r.title}" onerror="this.style.display='none'">
-      <div class="meta-result-info">
-        <div class="meta-result-title">${r.title}</div>
-        <div class="meta-result-meta">${r.status||''} ${r.chapters ? '• '+r.chapters+' ch' : ''} ${r.format ? '• '+r.format : ''}</div>
-      </div>
-      <button class="meta-apply-btn" onclick="applyMetadata('${r.id}','${source}','${r.cover||''}',this)">Apply</button>
-    </div>
-  `).join('');
-}
-
-async function applyMetadata(externalId, source, cover, btn) {
-  btn.textContent = 'Applying…'; btn.disabled = true;
-  const params = new URLSearchParams({source, external_id: externalId});
-  if (cover) params.set('cover', cover);
-  const res = await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`);
-  const result = await res.json();
-  if (result.ok) {
-    btn.textContent = '✓ Applied'; btn.className = 'meta-apply-btn applied';
-    setTimeout(load, 1500);
-  } else {
-    btn.textContent = 'Failed'; btn.disabled = false;
-  }
+  const anilist = results.find(r => r.source === 'anilist');
+  const mal = results.find(r => r.source === 'myanimelist');
+  const best = anilist || mal;
+  if (!best) return;
+  const source = best.source;
+  const params = new URLSearchParams({source, external_id: best.id});
+  if (best.cover) params.set('cover', best.cover);
+  await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`, {method:'PUT'});
+  load();
 }
 
 load();

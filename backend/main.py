@@ -146,6 +146,7 @@ def init_db():
         INSERT OR IGNORE INTO scan_settings VALUES ('scan_interval', '300');
         INSERT OR IGNORE INTO scan_settings VALUES ('auto_scan_enabled', '1');
         INSERT OR IGNORE INTO scan_settings VALUES ('watch_enabled', '1');
+        INSERT OR IGNORE INTO scan_settings VALUES ('scan_on_folder_change', '1');
         CREATE TABLE IF NOT EXISTS manga (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -212,8 +213,10 @@ def init_db():
         );
         INSERT OR IGNORE INTO sources VALUES ('mangadex','MangaDex','https://api.mangadex.org','mangadex',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangasee','MangaSee','https://mangasee123.com','mangasee',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','anilist',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','myanimelist',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangakakalot','MangaKakalot','https://mangakakalot.com','mangakakalot',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangafox','MangaFox','https://fanfox.net','mangafox',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','metadata',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','metadata',1,datetime('now'));
         """)
 
 def migrate_db():
@@ -339,6 +342,8 @@ def get_scan_cooldown():
 
 def debounced_scan():
     global _scan_pending, _last_scan
+    if get_scan_setting("scan_on_folder_change") != "1":
+        return
     now = time.time()
     cooldown = get_scan_cooldown()
     if now - _last_scan < cooldown:
@@ -501,27 +506,33 @@ def extract_pages(file_path: Path) -> List[str]:
 def scan_manga_dir():
     """Scan all configured manga directories and update database."""
     directories = get_manga_directories()
-    db = get_db()
+    _set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
+    all_items = []
     for dir_conf in directories:
         scan_path = Path(dir_conf["path"])
         if not scan_path.exists():
             continue
         for item in scan_path.iterdir():
-            if item.is_dir():
-                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-                existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
-                if not existing:
-                    chapters = []
-                    for f in sorted(item.iterdir()):
-                        if f.suffix.lower() in SUPPORTED_FORMATS:
-                            chapters.append(f)
-                    if chapters:
-                        nfo = read_nfo(item)
-                        if nfo and nfo.get("title"):
-                            meta = nfo
-                        else:
-                            meta = extract_metadata(chapters[0])
-                        db.execute(
+            if item.is_dir() or item.suffix.lower() in SUPPORTED_FORMATS:
+                all_items.append((scan_path, item))
+    _set_scan_progress(total=len(all_items), message="Scanning...")
+    db = get_db()
+    for scan_path, item in all_items:
+        if item.is_dir():
+            manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+            existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
+            if not existing:
+                chapters = []
+                for f in sorted(item.iterdir()):
+                    if f.suffix.lower() in SUPPORTED_FORMATS:
+                        chapters.append(f)
+                if chapters:
+                    nfo = read_nfo(item)
+                    if nfo and nfo.get("title"):
+                        meta = nfo
+                    else:
+                        meta = extract_metadata(chapters[0])
+                    db.execute(
     """
     INSERT OR IGNORE INTO manga (
         id,
@@ -567,33 +578,34 @@ def scan_manga_dir():
         meta.get('year')
     )
 )
-                        volumes = {}
-                        for i, ch in enumerate(chapters):
-                            ch_meta = extract_metadata(ch)
-                            vol_num = int(ch_meta.get('volume', 0)) if ch_meta.get('volume') and ch_meta['volume'].isdigit() else 0
-                            if vol_num not in volumes:
-                                volumes[vol_num] = {'chapters': [], 'meta': ch_meta}
-                            volumes[vol_num]['chapters'].append((i, ch))
-                        for vol_num, vol_data in volumes.items():
-                            vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}-v{vol_num}"))
-                            vol_meta = vol_data['meta']
+                    volumes = {}
+                    for i, ch in enumerate(chapters):
+                        ch_meta = extract_metadata(ch)
+                        vol_num = int(ch_meta.get('volume', 0)) if ch_meta.get('volume') and ch_meta['volume'].isdigit() else 0
+                        if vol_num not in volumes:
+                            volumes[vol_num] = {'chapters': [], 'meta': ch_meta}
+                        volumes[vol_num]['chapters'].append((i, ch))
+                    for vol_num, vol_data in volumes.items():
+                        vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}-v{vol_num}"))
+                        vol_meta = vol_data['meta']
+                        db.execute(
+                            "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path, total_chapters, cover, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (vol_id, manga_id, vol_num, vol_meta.get('series') or f"Volume {vol_num}" if vol_num else "Volume 1", str(item), len(vol_data['chapters']), None, vol_meta.get('summary'))
+                        )
+                        for i, ch in vol_data['chapters']:
+                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                            ch_num = float(ch_meta.get('number', i + 1)) if ch_meta.get('number') else float(i + 1)
                             db.execute(
-                                "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path, total_chapters, cover, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                (vol_id, manga_id, vol_num, vol_meta.get('series') or f"Volume {vol_num}" if vol_num else "Volume 1", str(item), len(vol_data['chapters']), None, vol_meta.get('summary'))
+                                "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, vol_id)
                             )
-                            for i, ch in vol_data['chapters']:
-                                ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
-                                ch_num = float(ch_meta.get('number', i + 1)) if ch_meta.get('number') else float(i + 1)
-                                db.execute(
-                                    "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                    (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, vol_id)
-                                )
-            elif item.suffix.lower() in SUPPORTED_FORMATS:
-                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
-                existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
-                if not existing:
-                    meta = extract_metadata(item)
-                    db.execute("""
+                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": meta.get('title') or meta.get('series') or item.name})
+        elif item.suffix.lower() in SUPPORTED_FORMATS:
+            manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+            existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
+            if not existing:
+                meta = extract_metadata(item)
+                db.execute("""
 INSERT OR IGNORE INTO manga (
     id,
     title,
@@ -638,11 +650,18 @@ INSERT OR IGNORE INTO manga (
 ))
                 ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 db.execute(
-                    "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
                 )
+                _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": meta.get('series') or item.stem})
+        _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
     db.commit()
     db.close()
+    new_count = len(_scan_progress["new_manga"])
+    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
+    for nm in _scan_progress["new_manga"]:
+        threading.Thread(target=auto_fetch_metadata, args=(nm["id"], nm["path"], nm["title"]), daemon=True).start()
+    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series. Fetching metadata..." if new_count else "Scan complete. No new series.")
 
 # ── Routes: Pages ─────────────────────────────────────────────────────────────
 
@@ -795,6 +814,16 @@ async def get_recently_added():
     db.close()
     return [dict(r) for r in rows]
 
+# ── Scan Progress Tracking ───────────────────────────────────────────────────
+
+_scan_progress = {"running": False, "total": 0, "current": 0, "new_manga": [], "message": ""}
+
+def _get_scan_progress():
+    return dict(_scan_progress)
+
+def _set_scan_progress(**kwargs):
+    _scan_progress.update(kwargs)
+
 # ── Routes: API: Scan Settings ────────────────────────────────────────────────
 
 class MangaDirAdd(BaseModel):
@@ -804,6 +833,7 @@ class ScanSettingsUpdate(BaseModel):
     scan_interval: Optional[int] = None
     auto_scan_enabled: Optional[bool] = None
     watch_enabled: Optional[bool] = None
+    scan_on_folder_change: Optional[bool] = None
 
 @app.get("/api/scan-settings")
 async def get_scan_settings(request: Request):
@@ -812,6 +842,7 @@ async def get_scan_settings(request: Request):
         "scan_interval": int(get_scan_setting("scan_interval") or 300),
         "auto_scan_enabled": get_scan_setting("auto_scan_enabled") == "1",
         "watch_enabled": get_scan_setting("watch_enabled") == "1",
+        "scan_on_folder_change": get_scan_setting("scan_on_folder_change") == "1",
         "directories": get_all_manga_directories()
     }
 
@@ -819,12 +850,14 @@ async def get_scan_settings(request: Request):
 async def update_scan_settings(data: ScanSettingsUpdate, request: Request):
     require_admin(request)
     if data.scan_interval is not None:
-        set_scan_setting("scan_interval", str(max(30, data.scan_interval)))
+        set_scan_setting("scan_interval", str(max(300, data.scan_interval)))
     if data.auto_scan_enabled is not None:
         set_scan_setting("auto_scan_enabled", "1" if data.auto_scan_enabled else "0")
     if data.watch_enabled is not None:
         set_scan_setting("watch_enabled", "1" if data.watch_enabled else "0")
         start_folder_watcher()
+    if data.scan_on_folder_change is not None:
+        set_scan_setting("scan_on_folder_change", "1" if data.scan_on_folder_change else "0")
     return get_scan_settings(request)
 
 @app.get("/api/scan-directories")
@@ -877,8 +910,15 @@ async def toggle_scan_directory(dir_id: str, request: Request):
 @app.post("/api/scan-now")
 async def scan_now(request: Request):
     require_admin(request)
+    if _scan_progress["running"]:
+        return {"ok": False, "message": "Scan already running"}
     threading.Thread(target=scan_manga_dir, daemon=True).start()
     return {"ok": True}
+
+@app.get("/api/scan-progress")
+async def get_scan_progress(request: Request):
+    require_admin(request)
+    return _get_scan_progress()
 
 @app.post("/api/scrape-all-covers")
 async def scrape_all_covers(request: Request):
@@ -1314,6 +1354,62 @@ async def search_manga(q: str, source: str = "mangadex"):
                 "genres": [g["name"] for g in m.get("genres", [])]
             })
         return results
+
+    if source == "mangakakalot":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://mangakakalot.com/search/story/{q.replace(' ', '_')}"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url, headers=headers) as resp:
+                html = await resp.text()
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select("div.daily-update-storie-item")[:20]:
+            link = item.select_one("h3 a")
+            img = item.select_one("img")
+            if link and img:
+                title = link.get("title", "") or link.text.strip()
+                href = link.get("href", "")
+                cover = img.get("src", "")
+                if not cover.startswith("http"):
+                    cover = f"https://mangakakalot.com{cover}"
+                results.append({
+                    "id": href,
+                    "title": title,
+                    "cover": cover,
+                    "status": None,
+                    "source": "mangakakalot",
+                    "description": ""
+                })
+        return results
+
+    if source == "mangafox":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://fanfox.net/search?title={q}"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url, headers=headers) as resp:
+                html = await resp.text()
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select(".search-result-item")[:20]:
+            link = item.select_one("a")
+            img = item.select_one("img")
+            if link:
+                title = link.get("title", "") or link.text.strip()
+                href = link.get("href", "")
+                cover = img.get("src", "") if img else ""
+                if cover and not cover.startswith("http"):
+                    cover = f"https://fanfox.net{cover}"
+                results.append({
+                    "id": href,
+                    "title": title,
+                    "cover": cover,
+                    "status": None,
+                    "source": "mangafox",
+                    "description": ""
+                })
+        return results
     return []
 
 @app.get("/api/search-all")
@@ -1421,6 +1517,57 @@ async def get_source_chapters(source: str, manga_id: str):
                 "pages": attr.get("pages", 0),
                 "source": "mangadex"
             })
+        return chapters
+
+    if source == "mangakakalot":
+        from bs4 import BeautifulSoup
+        async with aiohttp.ClientSession() as session:
+            url = f"https://mangakakalot.com{manga_id}" if not manga_id.startswith("http") else manga_id
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url, headers=headers) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for row in soup.select("ul.row-content-chapter li")[:500]:
+            link = row.select_one("a")
+            if link:
+                ch_text = link.text.strip()
+                import re
+                m = re.search(r'chapter\s*([\d.]+)', ch_text, re.I)
+                ch_num = m.group(1) if m else ch_text
+                chapters.append({
+                    "id": link.get("href", ""),
+                    "chapter": ch_num,
+                    "title": ch_text,
+                    "pages": 0,
+                    "source": "mangakakalot"
+                })
+        chapters.reverse()
+        return chapters
+
+    if source == "mangafox":
+        from bs4 import BeautifulSoup
+        async with aiohttp.ClientSession() as session:
+            url = f"https://fanfox.net{manga_id}" if not manga_id.startswith("http") else manga_id
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url, headers=headers) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for row in soup.select(".detail-main-list li")[:500]:
+            link = row.select_one("a")
+            if link:
+                ch_text = link.select_one("span").text.strip() if link.select_one("span") else link.text.strip()
+                import re
+                m = re.search(r'ch\.?([\d.]+)', ch_text, re.I)
+                ch_num = m.group(1) if m else ch_text
+                chapters.append({
+                    "id": link.get("href", ""),
+                    "chapter": ch_num,
+                    "title": ch_text,
+                    "pages": 0,
+                    "source": "mangafox"
+                })
         return chapters
 
     if source == "anilist":

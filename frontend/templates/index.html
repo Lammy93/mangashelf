@@ -105,6 +105,10 @@
   /* SCRAPE BTN */
   .scrape-btn{padding:.25rem .6rem;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.7rem;cursor:pointer;font-family:inherit;transition:all .2s;}
   .scrape-btn:hover{border-color:var(--accent2);color:var(--accent2);}
+  .field{padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;width:100%;}
+  .field:focus{border-color:var(--accent);}
+  select.field{cursor:pointer;}
+  textarea.field{resize:vertical;}
 
   .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;}
   .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
@@ -161,13 +165,13 @@
     {% endif %}
   </nav>
   <div id="sidebar-footer">
-    <div class="sidebar-user">
+    <div class="sidebar-user" onclick="window.location='/settings'" style="cursor:pointer;">
       <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
       <div class="user-info">
         <div class="user-name">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
         <div class="user-role">{{ user.role if user else '' }}</div>
       </div>
-      <a href="/logout" class="logout-btn" title="Sign out">
+      <a href="/logout" class="logout-btn" title="Sign out" onclick="event.stopPropagation();">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
       </a>
     </div>

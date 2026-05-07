@@ -37,6 +37,20 @@ DB_PATH = Path("/data/manga.db")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 import queue
+_processing_manga = set()
+_processing_lock = threading.Lock()
+
+def is_manga_processing(manga_id: str) -> bool:
+    with _processing_lock:
+        return manga_id in _processing_manga
+
+def mark_manga_processing(manga_id: str, processing: bool):
+    with _processing_lock:
+        if processing:
+            _processing_manga.add(manga_id)
+        else:
+            _processing_manga.discard(manga_id)
+
 _background_queue = queue.Queue()
 def _background_worker():
     while True:
@@ -286,7 +300,12 @@ def migrate_db():
     add_col("users", "avatar", "TEXT", "NULL")
     add_col("users", "display_name", "TEXT", "NULL")
     add_col("chapters", "volume_id", "TEXT", "NULL")
+    add_col("chapters", "slug", "TEXT", "NULL")
     add_col("manga", "slug", "TEXT", "NULL")
+    for row in db.execute("SELECT id, title FROM manga WHERE slug IS NULL AND title IS NOT NULL"):
+        db.execute("UPDATE manga SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
+    for row in db.execute("SELECT id, title FROM chapters WHERE slug IS NULL AND title IS NOT NULL"):
+        db.execute("UPDATE chapters SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
     db.commit()
     db.close()
 
@@ -699,13 +718,14 @@ def scan_manga_dir():
                 meta.get('year')
             )
         )
-                        for i, ch in enumerate(chapters):
-                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
-                            ch_num = float(i + 1)
-                            db.execute(
-                                "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None)
-                            )
+                    for i, ch in enumerate(chapters):
+                        ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                        ch_num = float(i + 1)
+                        ch_slug = slugify(ch.stem)
+                        db.execute(
+                            "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None, ch_slug)
+                        )
                         title = meta.get('title') or meta.get('series') or item.name
                         _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
                         if not nfo or not nfo.get("title") or not nfo.get("author"):
@@ -761,9 +781,10 @@ def scan_manga_dir():
             None
         ))
                     ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                    ch_slug = slugify(item.stem)
                     db.execute(
-                        "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
+                        "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None, ch_slug)
                     )
                     _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
                     new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
@@ -785,6 +806,7 @@ def scan_manga_dir():
 
 def pre_extract_pages(manga_id: str):
     """Pre-extract pages for all chapters of a manga in background."""
+    mark_manga_processing(manga_id, True)
     try:
         db = get_db()
         chapters = db.execute("SELECT id, path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
@@ -797,6 +819,8 @@ def pre_extract_pages(manga_id: str):
                     extract_pages(p)
     except Exception as e:
         logger.error(f"[pre-extract] Failed for manga {manga_id}: {e}")
+    finally:
+        mark_manga_processing(manga_id, False)
 
 # ── Routes: Pages ─────────────────────────────────────────────────────────────
 
@@ -828,6 +852,13 @@ def resolve_manga(identifier: str) -> Optional[str]:
     """Resolve a manga UUID or slug to its ID."""
     db = get_db()
     row = db.execute("SELECT id FROM manga WHERE id=? OR slug=?", (identifier, identifier)).fetchone()
+    db.close()
+    return row["id"] if row else None
+
+def resolve_chapter(manga_id: str, identifier: str) -> Optional[str]:
+    """Resolve a chapter UUID or slug to its ID within a manga."""
+    db = get_db()
+    row = db.execute("SELECT id FROM chapters WHERE (id=? OR (manga_id=? AND slug=?))", (identifier, manga_id, identifier)).fetchone()
     db.close()
     return row["id"] if row else None
 
@@ -932,11 +963,14 @@ async def reader(request: Request, manga_id: str, chapter_id: str, slug: str = N
     resolved = resolve_manga(manga_id)
     if not resolved:
         raise HTTPException(404, "Manga not found")
+    ch_resolved = resolve_chapter(resolved, chapter_id)
+    if not ch_resolved:
+        raise HTTPException(404, "Chapter not found")
     user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login")
     manga_slug = get_manga_slug(resolved)
-    return templates.TemplateResponse("reader.html", {"request": request, "manga_id": resolved, "slug": manga_slug, "chapter_id": chapter_id, "user": user})
+    return templates.TemplateResponse("reader.html", {"request": request, "manga_id": resolved, "slug": manga_slug, "chapter_id": ch_resolved, "user": user})
 
 @app.get("/sources")
 async def sources_page(request: Request):
@@ -975,13 +1009,16 @@ async def get_library(q: str = ""):
             ORDER BY m.title
         """).fetchall()
     db.close()
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    for item in result:
+        item["processing"] = is_manga_processing(item["id"])
+    return result
 
 @app.get("/api/continue-reading")
 async def get_continue_reading():
     db = get_db()
     rows = db.execute("""
-        SELECT m.id, m.slug, m.title, m.cover, c.id as chapter_id, c.chapter_number, c.title as chapter_title,
+        SELECT m.id, m.slug, m.title, m.cover, c.id as chapter_id, c.slug as chapter_slug, c.chapter_number, c.title as chapter_title,
                c.read_page as page, c.pages
         FROM manga m
         JOIN chapters c ON c.manga_id = m.id
@@ -1004,7 +1041,10 @@ async def get_recently_added():
         LIMIT 8
     """).fetchall()
     db.close()
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    for item in result:
+        item["processing"] = is_manga_processing(item["id"])
+    return result
 
 # ── Scan Progress Tracking ───────────────────────────────────────────────────
 
@@ -1327,6 +1367,7 @@ import logging
 logger = logging.getLogger("mangashelf")
 
 def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
+    mark_manga_processing(manga_id, True)
     try:
         logger.info(f"[metadata] Fetching for '{manga_title}' ({manga_id})")
         db = get_db()
@@ -1411,6 +1452,8 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
         asyncio.run(_fetch())
     except Exception as e:
         logger.error(f"[metadata] Failed for '{manga_title}': {e}")
+    finally:
+        mark_manga_processing(manga_id, False)
 
 @app.post("/api/manga/{manga_id}/scrape-cover")
 async def scrape_manga_cover(manga_id: str, request: Request):

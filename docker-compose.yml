@@ -1,16 +1,36 @@
-version: "3.9"
-
 services:
   mangashelf:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ghcr.io/lammy93/mangashelf:latest
     container_name: mangashelf
     restart: unless-stopped
-    user: "99:100"
     ports:
-      - "8035:8080"
+      - "${HOST_PORT:-8035}:8080"
     volumes:
-      - /mnt/user/dataz/media/books/Manga/mangas:/manga
-      - /mnt/user/dataz/docker/mangashelf/data:/data
+      - "${MANGA_DIR:-./manga}:/manga"
+      - "${DATA_DIR:-./data}:/data"
     environment:
-      - TZ=Australia/Brisbane
-      - SECRET_KEY=change-this-to-a-long-random-string
+      - TZ=${TZ:-Australia/Brisbane}
+      - SECRET_KEY=${SECRET_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/docs')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "${CPU_LIMIT:-2.0}"
+          memory: "${MEMORY_LIMIT:-1G}"
+        reservations:
+          cpus: "${CPU_RESERVATION:-0.5}"
+          memory: "${MEMORY_RESERVATION:-256M}"
+    networks:
+      - mangashelf-net
+
+networks:
+  mangashelf-net:
+    driver: bridge

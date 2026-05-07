@@ -2,10 +2,12 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List
-import os, json, zipfile, rarfile, fitz, shutil, asyncio, aiohttp, uuid
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import os, json, zipfile, rarfile, fitz, shutil, asyncio, aiohttp, uuid, base64, hmac, threading, time
 from pathlib import Path
 from datetime import datetime
 import sqlite3
@@ -31,6 +33,13 @@ def get_db():
 def init_db():
     with get_db() as db:
         db.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            created_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS manga (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -81,6 +90,121 @@ def init_db():
         """)
 
 init_db()
+
+SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
+
+def is_first_launch():
+    db = get_db()
+    count = db.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+    db.close()
+    return count["cnt"] == 0
+
+def create_default_admin():
+    if is_first_launch():
+        db = get_db()
+        db.execute(
+            "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "admin", hash_password("admin"), "admin", datetime.now().isoformat())
+        )
+        db.commit()
+        db.close()
+
+create_default_admin()
+
+# ── Session Management ────────────────────────────────────────────────────────
+
+def create_session_token(user_id: str, username: str, role: str) -> str:
+    payload = base64.b64encode(json.dumps({"uid": user_id, "user": username, "role": role}).encode()).decode()
+    sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+def verify_session_token(token: str) -> Optional[dict]:
+    try:
+        payload, sig = token.split(".")
+        if hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest() != sig:
+            return None
+        return json.loads(base64.b64decode(payload))
+    except Exception:
+        return None
+
+async def get_current_user(request: Request) -> Optional[dict]:
+    token = request.cookies.get("session")
+    if not token:
+        return None
+    return verify_session_token(token)
+
+def require_auth(request: Request):
+    token = request.cookies.get("session")
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    user = verify_session_token(token)
+    if not user:
+        raise HTTPException(401, "Invalid session")
+    return user
+
+def require_admin(request: Request):
+    user = require_auth(request)
+    if user["role"] != "admin":
+        raise HTTPException(403, "Admin access required")
+    return user
+
+# ── Folder Watcher ────────────────────────────────────────────────────────────
+
+_scan_lock = threading.Lock()
+_scan_pending = False
+_last_scan = 0.0
+SCAN_COOLDOWN = 10.0
+
+def debounced_scan():
+    global _scan_pending, _last_scan
+    now = time.time()
+    if now - _last_scan < SCAN_COOLDOWN:
+        return
+    with _scan_lock:
+        if not _scan_pending:
+            _scan_pending = True
+            def do_scan():
+                global _scan_pending, _last_scan
+                try:
+                    scan_manga_dir()
+                finally:
+                    _scan_pending = False
+                    _last_scan = time.time()
+            threading.Thread(target=do_scan, daemon=True).start()
+
+class MangaDirHandler(FileSystemEventHandler):
+    SUPPORTED_EXTS = {'.cbz', '.cbr', '.pdf', '.zip', '.rar', '.epub'}
+
+    def _should_trigger(self, event: FileSystemEvent) -> bool:
+        if event.is_directory:
+            return True
+        return Path(event.src_path).suffix.lower() in self.SUPPORTED_EXTS
+
+    def on_created(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+    def on_deleted(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+    def on_moved(self, event: FileSystemEvent):
+        debounced_scan()
+
+    def on_closed(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+def start_folder_watcher():
+    if not MANGA_DIR.exists():
+        MANGA_DIR.mkdir(parents=True, exist_ok=True)
+    handler = MangaDirHandler()
+    observer = Observer()
+    observer.schedule(handler, str(MANGA_DIR), recursive=True)
+    observer.daemon = True
+    observer.start()
+
+start_folder_watcher()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -241,13 +365,76 @@ INSERT OR IGNORE INTO manga (
 
 @app.get("/")
 async def index(request: Request):
+    user = await get_current_user(request)
     return templates.TemplateResponse(
         "index.html",
-        {
-            "request": request,
-            "user": None
-        }
+        {"request": request, "user": user}
     )
+
+@app.get("/setup")
+async def setup_page(request: Request):
+    if not is_first_launch():
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("setup.html", {"request": request})
+
+@app.post("/setup")
+async def setup_post(request: Request):
+    if not is_first_launch():
+        return RedirectResponse(url="/login")
+    form = await request.form()
+    username = form.get("username", "").strip()
+    password = form.get("password", "")
+    confirm = form.get("confirm_password", "")
+    if len(username) < 3:
+        return templates.TemplateResponse("setup.html", {"request": request, "error": "Username must be at least 3 characters."})
+    if len(password) < 6:
+        return templates.TemplateResponse("setup.html", {"request": request, "error": "Password must be at least 6 characters."})
+    if password != confirm:
+        return templates.TemplateResponse("setup.html", {"request": request, "error": "Passwords do not match."})
+    db = get_db()
+    db.execute(
+        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), username, hash_password(password), "admin", datetime.now().isoformat())
+    )
+    db.commit()
+    user_row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    db.close()
+    token = create_session_token(user_row["id"], user_row["username"], user_row["role"])
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+    return response
+
+@app.get("/login")
+async def login_page(request: Request):
+    if is_first_launch():
+        return RedirectResponse(url="/setup")
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    username = form.get("username", "").strip()
+    password = form.get("password", "")
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    db.close()
+    if not user or not verify_password(password, user["password_hash"]):
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password."})
+    token = create_session_token(user["id"], user["username"], user["role"])
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+    return response
+
+@app.get("/logout")
+async def logout(request: Request):
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie(key="session")
+    return response
+
+@app.get("/admin")
+async def admin_page(request: Request):
+    user = require_admin(request)
+    return templates.TemplateResponse("admin.html", {"request": request, "user": user})
 
 @app.get("/read/{manga_id}/{chapter_id}")
 async def reader(request: Request, manga_id: str, chapter_id: str):
@@ -295,6 +482,54 @@ async def get_pages(chapter_id: str):
     db.commit()
     db.close()
     return {"pages": pages, "total": len(pages)}
+
+# ── Routes: API: Users ────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+@app.get("/api/users")
+async def get_users(request: Request):
+    require_admin(request)
+    db = get_db()
+    rows = db.execute("SELECT id, username, role, created_at FROM users ORDER BY created_at").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/users")
+async def create_user(data: UserCreate, request: Request):
+    require_admin(request)
+    if len(data.username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters.")
+    if len(data.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters.")
+    if data.role not in ("user", "admin"):
+        raise HTTPException(400, "Invalid role.")
+    db = get_db()
+    existing = db.execute("SELECT id FROM users WHERE username=?", (data.username,)).fetchone()
+    if existing:
+        db.close()
+        raise HTTPException(409, "Username already exists.")
+    db.execute(
+        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), data.username, hash_password(data.password), data.role, datetime.now().isoformat())
+    )
+    db.commit()
+    db.close()
+    return {"ok": True}
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str, request: Request):
+    user = require_admin(request)
+    if user["uid"] == user_id:
+        raise HTTPException(400, "Cannot delete yourself.")
+    db = get_db()
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    db.commit()
+    db.close()
+    return {"ok": True}
 
 @app.post("/api/progress")
 async def save_progress(data: ReadingProgress):
@@ -463,8 +698,11 @@ async def serve_cache(stem: str, filename: str):
     return FR(str(p))
 
 #  ── Password  ────────────────────────────────────────────────────────
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 def hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
+    return pwd_context.hash(pw)
 
 def verify_password(pw, hashed):
-    return hashlib.sha256(pw.encode()).hexdigest() == hashed
+    return pwd_context.verify(pw, hashed)

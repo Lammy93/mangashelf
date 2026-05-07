@@ -4,18 +4,19 @@
 <meta charset="UTF-8">
 <link rel="icon" type="image/png" href="/static/img/favicon.ico">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MangaShelf — Login</title>
+<title>MangaShelf — Setup</title>
 <link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;}
-  .login-wrap{width:100%;max-width:400px;padding:1.5rem;}
-  
-  
-  .tagline{text-align:center;color:var(--muted);font-size:.875rem;margin-bottom:2.5rem;}
+  .setup-wrap{width:100%;max-width:440px;padding:1.5rem;}
+  .welcome{text-align:center;margin-bottom:2rem;}
+  .welcome img{height:56px;width:56px;object-fit:cover;border-radius:10px;margin-bottom:1rem;}
+  .welcome h1{font-family:'Dela Gothic One',sans-serif;font-size:1.6rem;margin-bottom:.5rem;}
+  .welcome p{color:var(--muted);font-size:.9rem;}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;}
-  h2{font-family:'Dela Gothic One',sans-serif;font-size:1.2rem;margin-bottom:1.5rem;}
+  h2{font-family:'Dela Gothic One',sans-serif;font-size:1.1rem;margin-bottom:1.25rem;}
   .field-group{margin-bottom:1.1rem;}
   label{display:block;font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:.4rem;letter-spacing:.5px;text-transform:uppercase;}
   input{width:100%;padding:.7rem 1rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;font-size:.9rem;outline:none;transition:border-color .2s;font-family:inherit;}
@@ -23,30 +24,38 @@
   .btn{width:100%;padding:.75rem;border-radius:8px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.95rem;font-weight:700;background:var(--accent);color:#fff;margin-top:.5rem;transition:background .2s;}
   .btn:hover{background:#c93530;}
   .error{background:rgba(232,64,58,.1);border:1px solid rgba(232,64,58,.3);color:var(--accent);border-radius:8px;padding:.75rem 1rem;font-size:.85rem;margin-bottom:1rem;}
-  .hint{text-align:center;color:var(--muted);font-size:.75rem;margin-top:1.5rem;}
+  .hint{color:var(--muted);font-size:.75rem;margin-top:.5rem;}
 </style>
 </head>
 <body>
-<div class="login-wrap">
-  <a href="/" style="display:flex;align-items:center;text-decoration:none;"><img src="/static/img/logo.png" alt="MangaShelf" style="height:42px;width:42px;object-fit:cover;border-radius:8px;"></a>
-  <div class="tagline">Your personal manga library</div>
+<div class="setup-wrap">
+  <div class="welcome">
+    <img src="/static/img/logo.png" alt="MangaShelf">
+    <h1>Welcome to MangaShelf</h1>
+    <p>Create your admin account to get started.</p>
+  </div>
   <div class="card">
-    <h2>Sign In</h2>
+    <h2>Create Admin Account</h2>
     {% if error %}
     <div class="error">{{ error }}</div>
     {% endif %}
-    <form method="POST" action="/login">
+    <form method="POST" action="/setup">
       <div class="field-group">
         <label>Username</label>
-        <input type="text" name="username" placeholder="Enter username" required autofocus>
+        <input type="text" name="username" placeholder="Choose a username" required autofocus minlength="3">
+        <div class="hint">At least 3 characters</div>
       </div>
       <div class="field-group">
         <label>Password</label>
-        <input type="password" name="password" placeholder="Enter password" required>
+        <input type="password" name="password" placeholder="Choose a strong password" required minlength="6">
+        <div class="hint">At least 6 characters</div>
       </div>
-      <button class="btn" type="submit">Sign In</button>
+      <div class="field-group">
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password" placeholder="Repeat password" required minlength="6">
+      </div>
+      <button class="btn" type="submit">Create Account & Continue</button>
     </form>
-    <div class="hint">Forgot password? Contact your administrator.</div>
   </div>
 </div>
 </body>

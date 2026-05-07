@@ -37,6 +37,8 @@
     border-radius: 6px; padding: .3rem .6rem; font-size: .8rem; font-family: inherit; cursor: pointer;
     max-width: 200px;
   }
+  .nav-home { color: var(--muted); text-decoration: none; font-size: .85rem; transition: color .2s; }
+  .nav-home:hover { color: var(--text); }
 
   /* READING AREA */
   #reader-wrap {
@@ -98,7 +100,8 @@
 </div>
 
 <div id="toolbar">
-  <a href="/" style="color:var(--muted);text-decoration:none;font-size:.85rem;">← Library</a>
+  <a href="/manga/{{ manga_id }}" class="nav-home">← Detail</a>
+  <a href="/" class="nav-home">← Library</a>
   <select id="chapter-select" onchange="loadChapter(this.value)"></select>
   <div class="spacer"></div>
   <span id="page-info">— / —</span>

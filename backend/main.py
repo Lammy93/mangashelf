@@ -49,6 +49,19 @@ def init_db():
             role TEXT DEFAULT 'user',
             created_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS manga_directories (
+            id TEXT PRIMARY KEY,
+            path TEXT UNIQUE NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            added_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS scan_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+        INSERT OR IGNORE INTO scan_settings VALUES ('scan_interval', '300');
+        INSERT OR IGNORE INTO scan_settings VALUES ('auto_scan_enabled', '1');
+        INSERT OR IGNORE INTO scan_settings VALUES ('watch_enabled', '1');
         CREATE TABLE IF NOT EXISTS manga (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -99,6 +112,43 @@ def init_db():
         """)
 
 init_db()
+
+def get_scan_setting(key: str) -> str:
+    db = get_db()
+    row = db.execute("SELECT value FROM scan_settings WHERE key=?", (key,)).fetchone()
+    db.close()
+    return row["value"] if row else ""
+
+def set_scan_setting(key: str, value: str):
+    db = get_db()
+    db.execute("INSERT OR REPLACE INTO scan_settings (key, value) VALUES (?, ?)", (key, value))
+    db.commit()
+    db.close()
+
+def get_manga_directories():
+    db = get_db()
+    rows = db.execute("SELECT * FROM manga_directories WHERE enabled=1 ORDER BY added_at").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+def get_all_manga_directories():
+    db = get_db()
+    rows = db.execute("SELECT * FROM manga_directories ORDER BY added_at").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+def init_default_directory():
+    db = get_db()
+    count = db.execute("SELECT COUNT(*) as cnt FROM manga_directories").fetchone()
+    if count["cnt"] == 0:
+        db.execute(
+            "INSERT INTO manga_directories (id, path, enabled, added_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), "/manga", 1, datetime.now().isoformat())
+        )
+        db.commit()
+    db.close()
+
+init_default_directory()
 
 SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
 
@@ -162,12 +212,17 @@ def require_admin(request: Request):
 _scan_lock = threading.Lock()
 _scan_pending = False
 _last_scan = 0.0
-SCAN_COOLDOWN = 10.0
+_watcher = None
+
+def get_scan_cooldown():
+    interval = int(get_scan_setting("scan_interval") or 300)
+    return max(5, interval / 2)
 
 def debounced_scan():
     global _scan_pending, _last_scan
     now = time.time()
-    if now - _last_scan < SCAN_COOLDOWN:
+    cooldown = get_scan_cooldown()
+    if now - _last_scan < cooldown:
         return
     with _scan_lock:
         if not _scan_pending:
@@ -205,15 +260,34 @@ class MangaDirHandler(FileSystemEventHandler):
             debounced_scan()
 
 def start_folder_watcher():
-    if not MANGA_DIR.exists():
-        MANGA_DIR.mkdir(parents=True, exist_ok=True)
-    handler = MangaDirHandler()
-    observer = Observer()
-    observer.schedule(handler, str(MANGA_DIR), recursive=True)
-    observer.daemon = True
-    observer.start()
+    global _watcher
+    if _watcher:
+        _watcher.stop()
+    if get_scan_setting("watch_enabled") != "1":
+        return
+    _watcher = Observer()
+    directories = get_manga_directories()
+    for dir_conf in directories:
+        d = Path(dir_conf["path"])
+        if d.exists():
+            _watcher.schedule(MangaDirHandler(), str(d), recursive=True)
+    _watcher.daemon = True
+    _watcher.start()
+
+def start_interval_scanner():
+    if get_scan_setting("auto_scan_enabled") != "1":
+        return
+    def interval_loop():
+        while True:
+            interval = int(get_scan_setting("scan_interval") or 300)
+            time.sleep(interval)
+            if get_scan_setting("auto_scan_enabled") != "1":
+                break
+            scan_manga_dir()
+    threading.Thread(target=interval_loop, daemon=True).start()
 
 start_folder_watcher()
+start_interval_scanner()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -262,9 +336,14 @@ def extract_pages(file_path: Path) -> List[str]:
     return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
 
 def scan_manga_dir():
-    """Scan manga directory and update database."""
+    """Scan all configured manga directories and update database."""
+    directories = get_manga_directories()
     db = get_db()
-    for item in MANGA_DIR.iterdir():
+    for dir_conf in directories:
+        scan_path = Path(dir_conf["path"])
+        if not scan_path.exists():
+            continue
+        for item in scan_path.iterdir():
         if item.is_dir():
             manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
             existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
@@ -374,11 +453,20 @@ INSERT OR IGNORE INTO manga (
 
 @app.get("/")
 async def index(request: Request):
+    if is_first_launch():
+        return RedirectResponse(url="/setup")
     user = await get_current_user(request)
     return templates.TemplateResponse(
         "index.html",
         {"request": request, "user": user}
     )
+
+@app.get("/manga/{manga_id}")
+async def manga_detail(request: Request, manga_id: str):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("manga_detail.html", {"request": request, "manga_id": manga_id, "user": user})
 
 @app.get("/setup")
 async def setup_page(request: Request):
@@ -447,15 +535,24 @@ async def admin_page(request: Request):
 
 @app.get("/read/{manga_id}/{chapter_id}")
 async def reader(request: Request, manga_id: str, chapter_id: str):
-    return templates.TemplateResponse("reader.html", {"request": request, "manga_id": manga_id, "chapter_id": chapter_id})
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("reader.html", {"request": request, "manga_id": manga_id, "chapter_id": chapter_id, "user": user})
 
 @app.get("/sources")
 async def sources_page(request: Request):
-    return templates.TemplateResponse("sources.html", {"request": request})
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("sources.html", {"request": request, "user": user})
 
 @app.get("/search")
 async def search_page(request: Request):
-    return templates.TemplateResponse("search.html", {"request": request})
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("search.html", {"request": request, "user": user})
 
 # ── Routes: API: Library ──────────────────────────────────────────────────────
 
@@ -469,6 +566,114 @@ async def get_library(q: str = ""):
         rows = db.execute("SELECT * FROM manga ORDER BY title").fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+@app.get("/api/continue-reading")
+async def get_continue_reading():
+    db = get_db()
+    rows = db.execute("""
+        SELECT m.id, m.title, m.cover, c.id as chapter_id, c.chapter_number, c.title as chapter_title,
+               c.read_page as page, c.pages
+        FROM manga m
+        JOIN chapters c ON c.manga_id = m.id
+        WHERE c.read_page > 0 AND c.is_read = 0
+        ORDER BY m.updated_at DESC
+        LIMIT 10
+    """).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/recently-added")
+async def get_recently_added():
+    scan_manga_dir()
+    db = get_db()
+    rows = db.execute("SELECT * FROM manga ORDER BY added_at DESC LIMIT 8").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+# ── Routes: API: Scan Settings ────────────────────────────────────────────────
+
+class MangaDirAdd(BaseModel):
+    path: str
+
+class ScanSettingsUpdate(BaseModel):
+    scan_interval: Optional[int] = None
+    auto_scan_enabled: Optional[bool] = None
+    watch_enabled: Optional[bool] = None
+
+@app.get("/api/scan-settings")
+async def get_scan_settings(request: Request):
+    require_admin(request)
+    return {
+        "scan_interval": int(get_scan_setting("scan_interval") or 300),
+        "auto_scan_enabled": get_scan_setting("auto_scan_enabled") == "1",
+        "watch_enabled": get_scan_setting("watch_enabled") == "1",
+        "directories": get_all_manga_directories()
+    }
+
+@app.post("/api/scan-settings")
+async def update_scan_settings(data: ScanSettingsUpdate, request: Request):
+    require_admin(request)
+    if data.scan_interval is not None:
+        set_scan_setting("scan_interval", str(max(30, data.scan_interval)))
+    if data.auto_scan_enabled is not None:
+        set_scan_setting("auto_scan_enabled", "1" if data.auto_scan_enabled else "0")
+    if data.watch_enabled is not None:
+        set_scan_setting("watch_enabled", "1" if data.watch_enabled else "0")
+        start_folder_watcher()
+    return get_scan_settings(request)
+
+@app.get("/api/scan-directories")
+async def get_scan_directories(request: Request):
+    require_admin(request)
+    return get_all_manga_directories()
+
+@app.post("/api/scan-directories")
+async def add_scan_directory(data: MangaDirAdd, request: Request):
+    require_admin(request)
+    p = Path(data.path)
+    if not p.exists():
+        raise HTTPException(400, "Directory does not exist.")
+    db = get_db()
+    existing = db.execute("SELECT id FROM manga_directories WHERE path=?", (data.path,)).fetchone()
+    if existing:
+        db.close()
+        raise HTTPException(409, "Directory already added.")
+    db.execute(
+        "INSERT INTO manga_directories (id, path, enabled, added_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), data.path, 1, datetime.now().isoformat())
+    )
+    db.commit()
+    db.close()
+    start_folder_watcher()
+    scan_manga_dir()
+    return {"ok": True}
+
+@app.delete("/api/scan-directories/{dir_id}")
+async def delete_scan_directory(dir_id: str, request: Request):
+    require_admin(request)
+    db = get_db()
+    db.execute("DELETE FROM manga_directories WHERE id=?", (dir_id,))
+    db.commit()
+    db.close()
+    start_folder_watcher()
+    return {"ok": True}
+
+@app.patch("/api/scan-directories/{dir_id}/toggle")
+async def toggle_scan_directory(dir_id: str, request: Request):
+    require_admin(request)
+    db = get_db()
+    db.execute("UPDATE manga_directories SET enabled = 1 - enabled WHERE id=?", (dir_id,))
+    db.commit()
+    db.close()
+    start_folder_watcher()
+    scan_manga_dir()
+    return {"ok": True}
+
+@app.post("/api/scan-now")
+async def scan_now(request: Request):
+    require_admin(request)
+    scan_manga_dir()
+    return {"ok": True}
 
 @app.get("/api/manga/{manga_id}")
 async def get_manga(manga_id: str):

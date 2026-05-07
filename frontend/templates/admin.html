@@ -17,7 +17,7 @@
   .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
   .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
   .btn-danger{background:transparent;color:var(--muted);border:1px solid var(--border);font-size:.75rem;padding:.3rem .6rem;}.btn-danger:hover{border-color:#c93530;color:#c93530;}
-  .page-content{padding:2rem;max-width:800px;}
+  .page-content{padding:2rem;max-width:900px;}
   h1{font-family:'Dela Gothic One',sans-serif;font-size:1.8rem;margin-bottom:.4rem;}
   .subtitle{color:var(--muted);font-size:.875rem;margin-bottom:2rem;}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-bottom:1.5rem;}
@@ -25,14 +25,40 @@
   .form-row{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem;}
   input.field,select.field{flex:1;min-width:140px;padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;}
   input.field:focus,select.field:focus{border-color:var(--accent);}
-  .user-row{display:flex;align-items:center;gap:.75rem;padding:.65rem .9rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:.4rem;}
+  .user-row,.dir-row{display:flex;align-items:center;gap:.75rem;padding:.65rem .9rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:.4rem;}
   .user-avatar{width:32px;height:32px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;flex-shrink:0;}
   .user-avatar.admin-av{background:rgba(232,64,58,.15);color:var(--accent);}
-  .user-name{font-weight:600;font-size:.875rem;flex:1;}
+  .user-name,.dir-path{font-weight:600;font-size:.875rem;flex:1;}
+  .dir-path{font-family:monospace;font-weight:400;font-size:.8rem;word-break:break-all;}
   .badge{display:inline-block;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
   .badge-admin{background:rgba(232,64,58,.12);color:var(--accent);}
   .badge-user{background:rgba(122,122,140,.12);color:var(--muted);}
+  .badge-off{background:rgba(122,122,140,.12);color:var(--muted);}
+  .badge-on{background:rgba(74,222,128,.12);color:#4ade80;}
   .section-label{font-size:.7rem;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:.75rem;}
+
+  /* TABS */
+  .tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;}
+  .tab{padding:.5rem 1rem;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-family:inherit;font-size:.85rem;font-weight:600;transition:all .2s;}
+  .tab.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+
+  /* TOGGLE */
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.75rem 0;border-bottom:1px solid var(--border);}
+  .toggle-row:last-child{border-bottom:none;}
+  .toggle-label{font-size:.9rem;font-weight:500;}
+  .toggle-desc{font-size:.75rem;color:var(--muted);margin-top:.15rem;}
+  .toggle{position:relative;width:44px;height:24px;flex-shrink:0;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;inset:0;background:var(--border);border-radius:20px;cursor:pointer;transition:.2s;}
+  .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.2s;}
+  input:checked+.slider{background:var(--accent);}
+  input:checked+.slider:before{transform:translateX(20px);background:#fff;}
+  .interval-input{width:80px!important;flex:none;}
+  .status-msg{font-size:.8rem;padding:.5rem .75rem;border-radius:6px;margin-top:.5rem;display:none;}
+  .status-msg.success{display:block;background:rgba(74,222,128,.1);color:#4ade80;border:1px solid rgba(74,222,128,.2);}
+  .status-msg.error{display:block;background:rgba(232,64,58,.1);color:var(--accent);border:1px solid rgba(232,64,58,.2);}
 </style>
 </head>
 <body>
@@ -48,27 +74,83 @@
   <h1>Admin Panel</h1>
   <p class="subtitle">Manage users and system settings.</p>
 
-  <div class="card">
-    <h2>Add New User</h2>
-    <div class="form-row">
-      <input class="field" type="text" id="new-username" placeholder="Username">
-      <input class="field" type="password" id="new-password" placeholder="Password">
-      <select class="field" id="new-role">
-        <option value="user">User</option>
-        <option value="admin">Admin</option>
-      </select>
-    </div>
-    <button class="btn btn-primary" onclick="addUser()">+ Add User</button>
-    <div id="add-error" style="color:var(--accent);font-size:.8rem;margin-top:.5rem;"></div>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('users')">Users</button>
+    <button class="tab" onclick="switchTab('scan')">Scan Settings</button>
   </div>
 
-  <div class="card">
-    <h2>Users</h2>
-    <div id="users-list"></div>
+  <!-- USERS TAB -->
+  <div class="tab-content active" id="tab-users">
+    <div class="card">
+      <h2>Add New User</h2>
+      <div class="form-row">
+        <input class="field" type="text" id="new-username" placeholder="Username">
+        <input class="field" type="password" id="new-password" placeholder="Password">
+        <select class="field" id="new-role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="addUser()">+ Add User</button>
+      <div id="add-error" style="color:var(--accent);font-size:.8rem;margin-top:.5rem;"></div>
+    </div>
+    <div class="card">
+      <h2>Users</h2>
+      <div id="users-list"></div>
+    </div>
+  </div>
+
+  <!-- SCAN SETTINGS TAB -->
+  <div class="tab-content" id="tab-scan">
+    <div class="card">
+      <h2>Scan Configuration</h2>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Auto-scan at interval</div>
+          <div class="toggle-desc">Automatically scan directories every N seconds</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.75rem;">
+          <input class="field interval-input" type="number" id="scan-interval" value="300" min="30">
+          <label class="toggle">
+            <input type="checkbox" id="auto-scan-toggle" checked onchange="saveScanSettings()">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Watch for changes</div>
+          <div class="toggle-desc">Detect new files and trigger scan automatically</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="watch-toggle" checked onchange="saveScanSettings()">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div style="padding:.75rem 0;">
+        <button class="btn btn-primary" onclick="scanNow()">⚡ Scan Now</button>
+        <span id="scan-status" class="status-msg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Manga Directories</h2>
+      <div class="form-row">
+        <input class="field" type="text" id="new-dir-path" placeholder="Directory path (e.g. /mnt/media/manga)">
+        <button class="btn btn-primary" onclick="addDir()">+ Add Directory</button>
+      </div>
+      <div id="dirs-error" style="color:var(--accent);font-size:.8rem;margin-top:.5rem;"></div>
+      <div id="dirs-list" style="margin-top:1rem;"></div>
+    </div>
   </div>
 </div>
 
 <script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i === (tab==='users'?0:1)));
+  document.querySelectorAll('.tab-content').forEach((c,i) => c.classList.toggle('active', i === (tab==='users'?0:1)));
+}
+
 async function loadUsers() {
   const res = await fetch('/api/users');
   const users = await res.json();
@@ -108,7 +190,81 @@ async function deleteUser(id, name) {
   loadUsers();
 }
 
+async function loadScanSettings() {
+  const res = await fetch('/api/scan-settings');
+  const s = await res.json();
+  document.getElementById('scan-interval').value = s.scan_interval;
+  document.getElementById('auto-scan-toggle').checked = s.auto_scan_enabled;
+  document.getElementById('watch-toggle').checked = s.watch_enabled;
+  renderDirs(s.directories);
+}
+
+async function saveScanSettings() {
+  const interval = parseInt(document.getElementById('scan-interval').value) || 300;
+  const auto = document.getElementById('auto-scan-toggle').checked;
+  const watch = document.getElementById('watch-toggle').checked;
+  await fetch('/api/scan-settings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({scan_interval: interval, auto_scan_enabled: auto, watch_enabled: watch})
+  });
+}
+
+async function scanNow() {
+  const msg = document.getElementById('scan-status');
+  msg.className = 'status-msg'; msg.textContent = '';
+  const res = await fetch('/api/scan-now', {method:'POST'});
+  if (res.ok) {
+    msg.className = 'status-msg success'; msg.textContent = 'Scan started.';
+  } else {
+    msg.className = 'status-msg error'; msg.textContent = 'Scan failed.';
+  }
+  setTimeout(() => { msg.className = 'status-msg'; msg.textContent = ''; }, 5000);
+}
+
+function renderDirs(dirs) {
+  if (!dirs.length) { document.getElementById('dirs-list').innerHTML = '<p style="color:var(--muted);font-size:.875rem;">No directories configured.</p>'; return; }
+  document.getElementById('dirs-list').innerHTML = dirs.map(d => `
+    <div class="dir-row">
+      <div class="dir-path">${d.path}</div>
+      <span class="badge ${d.enabled?'badge-on':'badge-off'}">${d.enabled?'ACTIVE':'OFF'}</span>
+      <label class="toggle" title="Enable/Disable">
+        <input type="checkbox" ${d.enabled?'checked':''} onchange="toggleDir('${d.id}')">
+        <span class="slider"></span>
+      </label>
+      <button class="btn btn-danger" onclick="removeDir('${d.id}')">Remove</button>
+    </div>`).join('');
+}
+
+async function addDir() {
+  const path = document.getElementById('new-dir-path').value.trim();
+  if (!path) { document.getElementById('dirs-error').textContent = 'Enter a path.'; return; }
+  const res = await fetch('/api/scan-directories', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path})
+  });
+  if (res.ok) {
+    document.getElementById('new-dir-path').value = '';
+    document.getElementById('dirs-error').textContent = '';
+    loadScanSettings();
+  } else {
+    const d = await res.json();
+    document.getElementById('dirs-error').textContent = d.detail || 'Error adding directory.';
+  }
+}
+
+async function removeDir(id) {
+  if (!confirm('Remove this directory?')) return;
+  await fetch(`/api/scan-directories/${id}`, {method:'DELETE'});
+  loadScanSettings();
+}
+
+async function toggleDir(id) {
+  await fetch(`/api/scan-directories/${id}/toggle`, {method:'PATCH'});
+  loadScanSettings();
+}
+
 loadUsers();
+loadScanSettings();
 </script>
 </body>
 </html>

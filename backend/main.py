@@ -216,7 +216,34 @@ def init_db():
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','myanimelist',1,datetime('now'));
         """)
 
+def migrate_db():
+    db = get_db()
+    def add_col(table, col, type_def, default=None):
+        cols = [row["name"] for row in db.execute(f"PRAGMA table_info({table})")]
+        if col not in cols:
+            clause = f"{col} {type_def}"
+            if default is not None:
+                clause += f" DEFAULT {default}"
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {clause}")
+    add_col("manga", "total_chapters", "INTEGER", "0")
+    add_col("manga", "status", "TEXT", "'local'")
+    add_col("manga", "author", "TEXT", "NULL")
+    add_col("manga", "artist", "TEXT", "NULL")
+    add_col("manga", "genre", "TEXT", "NULL")
+    add_col("manga", "summary", "TEXT", "NULL")
+    add_col("manga", "publisher", "TEXT", "NULL")
+    add_col("manga", "year", "INTEGER", "NULL")
+    add_col("manga", "source", "TEXT", "NULL")
+    add_col("manga", "source_id", "TEXT", "NULL")
+    add_col("manga", "cover", "TEXT", "NULL")
+    add_col("users", "avatar", "TEXT", "NULL")
+    add_col("users", "display_name", "TEXT", "NULL")
+    add_col("chapters", "volume_id", "TEXT", "NULL")
+    db.commit()
+    db.close()
+
 init_db()
+migrate_db()
 
 def get_scan_setting(key: str) -> str:
     db = get_db()
@@ -933,11 +960,15 @@ async def upload_avatar(request: Request):
         raise HTTPException(400, "File too large (max 5MB).")
     avatar_dir = Path("/data/avatars")
     avatar_dir.mkdir(parents=True, exist_ok=True)
-    avatar_path = avatar_dir / f"{user['uid']}.png"
+    fname = getattr(avatar_file, 'filename', '')
+    ext = Path(fname).suffix.lower() if fname else '.png'
+    if ext not in ('.jpg', '.jpeg', '.png', '.gif', '.webp'):
+        ext = '.png'
+    avatar_path = avatar_dir / f"{user['uid']}{ext}"
     with open(avatar_path, "wb") as f:
         f.write(content)
     db = get_db()
-    avatar_url = f"/avatars/{user['uid']}.png"
+    avatar_url = f"/avatars/{user['uid']}{ext}"
     db.execute("UPDATE users SET avatar=? WHERE id=?", (avatar_url, user["uid"]))
     db.commit()
     u = db.execute("SELECT display_name, avatar FROM users WHERE id=?", (user["uid"],)).fetchone()
@@ -946,6 +977,93 @@ async def upload_avatar(request: Request):
     response = JSONResponse({"ok": True, "avatar": avatar_url})
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response
+
+async def download_and_cache_cover(url: str, cache_name: str) -> str:
+    if not url or url.startswith("/"):
+        return url
+    cache_path = Path("/data/cache") / f"{cache_name}.jpg"
+    if cache_path.exists():
+        return f"/cache/{cache_name}.jpg"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    cache_path.write_bytes(data)
+                    return f"/cache/{cache_name}.jpg"
+    except:
+        pass
+    return url
+
+def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
+    try:
+        async def _fetch():
+            query = """
+            query($search: String, $type: MediaType) {
+              Page(perPage: 3) {
+                media(search: $search, type: $type, isAdult: false) {
+                  id title { romaji english native } coverImage { large medium }
+                  status description(asHtml: false) chapters volumes genres format
+                  staff { edges { role node { name { full } } } }
+                }
+              }
+            }"""
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://graphql.anilist.co",
+                    json={"query": query, "variables": {"search": manga_title, "type": "MANGA"}}
+                ) as resp:
+                    data = await resp.json()
+            media_list = data.get("data", {}).get("Page", {}).get("media", [])
+            if not media_list:
+                return
+            best = None
+            for m in media_list:
+                title = (m["title"].get("english") or m["title"].get("romaji") or "").lower()
+                if title and any(word in title for word in manga_title.lower().split()):
+                    best = m
+                    break
+            if not best:
+                best = media_list[0]
+            title = best["title"].get("english") or best["title"].get("romaji") or best["title"].get("native") or ""
+            authors = [e["node"]["name"]["full"] for e in best.get("staff", {}).get("edges", []) if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
+            cover_url = best.get("coverImage", {}).get("large") or best.get("coverImage", {}).get("medium")
+            cached_cover = await download_and_cache_cover(cover_url, f"{manga_id}_cover")
+            db = get_db()
+            db.execute(
+                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, cover=?, updated_at=? WHERE id=?",
+                (
+                    title,
+                    authors[0] if authors else None,
+                    authors[1] if len(authors) > 1 else None,
+                    ", ".join(best.get("genres", [])),
+                    (best.get("description") or "")[:2000] if best.get("description") else None,
+                    best.get("status", "").upper() if best.get("status") else None,
+                    best.get("chapters") or 0,
+                    cached_cover,
+                    datetime.now().isoformat(),
+                    manga_id
+                )
+            )
+            db.commit()
+            p = Path(manga_path)
+            if p.is_dir():
+                write_nfo(p, {
+                    "Title": title,
+                    "Author": authors[0] if authors else None,
+                    "Artist": authors[1] if len(authors) > 1 else None,
+                    "Genre": ", ".join(best.get("genres", [])),
+                    "Summary": (best.get("description") or "")[:2000] if best.get("description") else None,
+                    "Status": best.get("status", "").upper() if best.get("status") else None,
+                    "TotalChapters": best.get("chapters") or 0,
+                    "Cover": cached_cover,
+                    "Source": "anilist",
+                    "SourceId": str(best["id"])
+                })
+            db.close()
+        asyncio.run(_fetch())
+    except:
+        pass
 
 @app.post("/api/manga/{manga_id}/scrape-cover")
 async def scrape_manga_cover(manga_id: str, request: Request):

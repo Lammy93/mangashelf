@@ -199,6 +199,7 @@
     <div class="tab-content" id="tab-metadata">
       <div class="meta-search">
         <div class="meta-search-row">
+          <button class="btn btn-ghost" onclick="refreshFromNfo()" title="Re-read mangashelf.xml">Refresh from NFO</button>
           <select id="meta-source">
             <option value="anilist">AniList</option>
             <option value="myanimelist">MyAnimeList</option>
@@ -350,6 +351,22 @@ async function readFirst() {
 async function scrapeCover() {
   await fetch(`/api/manga/${MANGA_ID}/scrape-cover`, {method:'POST'});
   setTimeout(load, 3000);
+}
+
+async function refreshFromNfo() {
+  const res = await fetch(`/api/manga/${MANGA_ID}/nfo`);
+  const nfo = await res.json();
+  if (nfo.ok && nfo.data) {
+    await fetch(`/api/manga/${MANGA_ID}/metadata`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(nfo.data)
+    });
+    load();
+    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:1rem;color:var(--success);">Refreshed from NFO & synced to DB.</div>';
+  } else {
+    document.getElementById('meta-results').innerHTML = '<div style="text-align:center;padding:1rem;color:var(--muted);">No NFO file found.</div>';
+  }
 }
 
 async function searchMetadata() {

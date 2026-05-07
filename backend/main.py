@@ -592,7 +592,7 @@ async def setup_post(request: Request):
     )
     db.commit()
     db.close()
-    token = create_session_token(user_row["id"], user_row["username"], user_row["role"], user_row.get("display_name"), user_row.get("avatar"))
+    token = create_session_token(user_row["id"], user_row["username"], user_row["role"], user_row["display_name"], user_row["avatar"])
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response
@@ -613,7 +613,7 @@ async def login_post(request: Request):
     db.close()
     if not user or not verify_password(password, user["password_hash"]):
         return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password."})
-    token = create_session_token(user["id"], user["username"], user["role"], user.get("display_name"), user.get("avatar"))
+    token = create_session_token(user["id"], user["username"], user["role"], user["display_name"], user["avatar"])
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response

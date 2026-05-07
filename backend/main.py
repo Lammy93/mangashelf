@@ -652,7 +652,7 @@ def scan_manga_dir():
             for item in scan_path.iterdir():
                 if item.is_dir() or item.suffix.lower() in SUPPORTED_FORMATS:
                     all_items.append((scan_path, item))
-        _set_scan_progress(total=len(all_items), message="Scanning...")
+        _set_scan_progress(total=sum(1 for _, item in all_items if item.is_dir()), message="Scanning...")
         db = get_db()
         new_manga_for_meta = []
         for scan_path, item in all_items:
@@ -730,6 +730,7 @@ def scan_manga_dir():
                         _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
                         if not nfo or not nfo.get("title") or not nfo.get("author"):
                             new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
+                _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
             elif item.suffix.lower() in SUPPORTED_FORMATS:
                 manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
@@ -788,7 +789,6 @@ def scan_manga_dir():
                     )
                     _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
                     new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
-            _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
         db.commit()
         db.close()
         new_count = len(_scan_progress["new_manga"])
@@ -1519,11 +1519,89 @@ async def get_pages(chapter_id: str):
     ch = db.execute("SELECT * FROM chapters WHERE id=?", (chapter_id,)).fetchone()
     if not ch:
         raise HTTPException(404, "Chapter not found")
-    pages = extract_pages(Path(ch["path"]))
-    db.execute("UPDATE chapters SET pages=? WHERE id=?", (len(pages), chapter_id))
+    file_path = Path(ch["path"])
+    out_dir = Path("/data/cache") / file_path.stem
+    if out_dir.exists():
+        pages = sorted([f for f in out_dir.iterdir() if f.suffix in {'.jpg','.png','.webp'}])
+        if pages:
+            urls = [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+            db.execute("UPDATE chapters SET pages=? WHERE id=?", (len(pages), chapter_id))
+            db.commit()
+            db.close()
+            return {"pages": urls, "total": len(pages)}
+    suffix = file_path.suffix.lower()
+    total = 0
+    try:
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                total = len([n for n in z.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}])
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                total = len([n for n in r.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}])
+        elif suffix == '.pdf':
+            doc = fitz.open(str(file_path))
+            total = len(doc)
+            doc.close()
+    except Exception as e:
+        logger.warning(f"[pages] Error counting pages in {file_path.name}: {e}")
+    db.execute("UPDATE chapters SET pages=? WHERE id=?", (total, chapter_id))
     db.commit()
     db.close()
-    return {"pages": pages, "total": len(pages)}
+    urls = [f"/api/chapter/{chapter_id}/page/{i}" for i in range(total)]
+    return {"pages": urls, "total": total}
+
+@app.get("/api/chapter/{chapter_id}/page/{page_num}")
+async def get_chapter_page(chapter_id: str, page_num: int):
+    db = get_db()
+    ch = db.execute("SELECT * FROM chapters WHERE id=?", (chapter_id,)).fetchone()
+    if not ch:
+        raise HTTPException(404, "Chapter not found")
+    file_path = Path(ch["path"])
+    out_dir = Path("/data/cache") / file_path.stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = file_path.suffix.lower()
+    try:
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                imgs = sorted([n for n in z.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}])
+                if page_num >= len(imgs):
+                    raise HTTPException(404, "Page not found")
+                img_member = imgs[page_num]
+                img_name = Path(img_member).name
+                cached = out_dir / img_name
+                if not cached.exists():
+                    cached.write_bytes(z.read(img_member))
+                return FileResponse(str(cached))
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                imgs = sorted([n for n in r.namelist() if Path(n).suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif'}])
+                if page_num >= len(imgs):
+                    raise HTTPException(404, "Page not found")
+                img_member = imgs[page_num]
+                img_name = Path(img_member).name
+                cached = out_dir / img_name
+                if not cached.exists():
+                    cached.write_bytes(r.read(img_member))
+                return FileResponse(str(cached))
+        elif suffix == '.pdf':
+            cached = out_dir / f"page_{page_num:04d}.png"
+            if not cached.exists():
+                doc = fitz.open(str(file_path))
+                if page_num >= len(doc):
+                    doc.close()
+                    raise HTTPException(404, "Page not found")
+                pix = doc[page_num].get_pixmap(dpi=150)
+                pix.save(str(cached))
+                doc.close()
+            return FileResponse(str(cached))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[page] Error extracting page {page_num} from {file_path.name}: {e}")
+        raise HTTPException(500, "Failed to extract page")
+    finally:
+        db.close()
+    raise HTTPException(400, "Unsupported file format")
 
 # ── Routes: API: Users ────────────────────────────────────────────────────────
 

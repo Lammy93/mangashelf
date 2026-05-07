@@ -158,19 +158,8 @@ def is_first_launch():
     db.close()
     return count["cnt"] == 0
 
-def create_default_admin():
-    if is_first_launch():
-        db = get_db()
-        db.execute(
-            "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), "admin", hash_password("admin"), "admin", datetime.now().isoformat())
-        )
-        db.commit()
-        db.close()
 
-create_default_admin()
-
-# ── Session Management ────────────────────────────────────────────────────────
+SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
 
 def create_session_token(user_id: str, username: str, role: str) -> str:
     payload = base64.b64encode(json.dumps({"uid": user_id, "user": username, "role": role}).encode()).decode()
@@ -898,6 +887,26 @@ async def download_chapter(data: DownloadRequest, background_tasks: BackgroundTa
 @app.get("/api/download/{job_id}")
 async def download_progress(job_id: str):
     return download_status.get(job_id, {"status": "unknown"})
+
+@app.post("/api/download-all")
+async def download_all_chapters(data: DownloadRequest, background_tasks: BackgroundTasks):
+    async with aiohttp.ClientSession() as session:
+        url = f"https://api.mangadex.org/manga/{data.chapter_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
+        async with session.get(url) as resp:
+            manga_data = await resp.json()
+    chapters = manga_data.get("data", [])
+    if not chapters:
+        raise HTTPException(404, "No chapters found.")
+    job_ids = []
+    for ch in chapters:
+        ch_id = ch["id"]
+        ch_num = ch["attributes"].get("chapter")
+        if not ch_num:
+            continue
+        job_id = str(uuid.uuid4())
+        background_tasks.add_task(download_mangadex_chapter, ch_id, data.manga_title, ch_num, job_id)
+        job_ids.append(job_id)
+    return {"job_ids": job_ids, "total": len(job_ids)}
 
 # ── Cache static serve ────────────────────────────────────────────────────────
 

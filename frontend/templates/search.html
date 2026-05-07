@@ -81,6 +81,11 @@
   .modal-title{font-family:'Dela Gothic One',sans-serif;font-size:1.1rem;margin-bottom:.35rem;}
   .modal-desc{font-size:.82rem;color:var(--muted);line-height:1.5;margin-bottom:.75rem;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
   .modal-close{align-self:flex-start;background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;padding:.2rem;}
+  .chapter-header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-bottom:1px solid var(--border);}
+  .chapter-header h3{font-family:'Dela Gothic One',sans-serif;font-size:.9rem;}
+  .dl-all-btn{padding:.35rem .75rem;border-radius:5px;font-size:.75rem;font-weight:600;cursor:pointer;border:none;font-family:inherit;background:var(--accent2);color:#fff;transition:background .2s;}
+  .dl-all-btn:hover{background:#e06a28;}
+  .dl-all-btn:disabled{opacity:.5;cursor:default;}
   .chapter-list{flex:1;overflow-y:auto;padding:.75rem;}
   .chapter-item{display:flex;align-items:center;justify-content:space-between;padding:.6rem .75rem;border-radius:6px;border:1px solid var(--border);margin-bottom:.4rem;gap:.75rem;background:var(--surface2);}
   .chapter-item:hover{border-color:var(--accent);}
@@ -177,6 +182,10 @@
       </div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
+    <div class="chapter-header">
+      <h3 id="chapter-count"></h3>
+      <button class="dl-all-btn" id="dl-all-btn" onclick="downloadAll()">↓ Download All</button>
+    </div>
     <div class="chapter-list" id="chapter-list">
       <div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>
     </div>
@@ -231,15 +240,18 @@ async function doSearch() {
     document.getElementById('results-wrap').innerHTML = '<div class="empty-search"><h3>No results</h3><p>Try a different search term.</p></div>';
     return;
   }
-  document.getElementById('results-wrap').innerHTML = `<div class="results-grid">${data.map((m,i)=>`
+  document.getElementById('results-wrap').innerHTML = `<div class="results-grid">${data.map((m,i)=>{
+    const coverUrl = m.cover ? m.cover.replace('.256.jpg', '.512.jpg') : '';
+    return `
     <div class="result-card" onclick="openManga(${i})">
-      <div class="result-cover"><img src="${m.cover||''}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
+      <div class="result-cover"><img src="${coverUrl}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'"></div>
       <div class="result-info">
         <div class="result-title">${m.title}</div>
         <div class="result-meta">${m.status||'unknown'}</div>
         <button class="btn btn-ghost" style="width:100%;padding:.4rem;font-size:.75rem;" onclick="event.stopPropagation();openManga(${i})">View Chapters</button>
       </div>
-    </div>`).join('')}</div>`;
+    </div>`;
+  }).join('')}</div>`;
   window._searchResults = data;
 }
 
@@ -247,17 +259,27 @@ async function openManga(idx) {
   currentResult = window._searchResults[idx];
   document.getElementById('modal-title').textContent = currentResult.title;
   document.getElementById('modal-desc').textContent = currentResult.description || '';
-  document.getElementById('modal-img').src = currentResult.cover || '';
+  const coverUrl = currentResult.cover
+    ? currentResult.cover.replace('.256.jpg', '.512.jpg')
+    : '';
+  document.getElementById('modal-img').src = coverUrl;
   document.getElementById('modal-status').textContent = currentResult.status || '';
+  document.getElementById('chapter-count').textContent = 'Loading chapters…';
+  document.getElementById('dl-all-btn').disabled = false;
+  document.getElementById('dl-all-btn').textContent = '↓ Download All';
   document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">Loading chapters…</div>';
   document.getElementById('modal-overlay').classList.add('open');
 
   const res = await fetch(`/api/manga-source/${currentResult.source}/${currentResult.id}/chapters`);
   const chapters = await res.json();
   if (!chapters.length) {
+    document.getElementById('chapter-count').textContent = 'No chapters found';
     document.getElementById('chapter-list').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No chapters found.</div>';
+    document.getElementById('dl-all-btn').disabled = true;
     return;
   }
+  document.getElementById('chapter-count').textContent = `${chapters.length} chapters`;
+  window._currentChapters = chapters;
   document.getElementById('chapter-list').innerHTML = chapters.map(c=>`
     <div class="chapter-item" id="ch-${c.id}">
       <div>
@@ -277,6 +299,24 @@ async function downloadChapter(chId, chNum) {
   });
   const {job_id} = await res.json();
   pollDownload(job_id, btn);
+}
+
+async function downloadAll() {
+  const btn = document.getElementById('dl-all-btn');
+  btn.disabled = true; btn.textContent = '⏳ Queuing…';
+  const res = await fetch('/api/download-all', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({chapter_id: currentResult.id, manga_title: currentResult.title, chapter_num: '', source: currentResult.source})
+  });
+  const data = await res.json();
+  btn.textContent = `↓ Queued ${data.total} chapters`;
+  setTimeout(() => { btn.textContent = '↓ Download All'; btn.disabled = false; }, 5000);
+  const btns = document.querySelectorAll('.chapter-item .dl-btn');
+  btns.forEach(b => { b.textContent = '⏳ Queued'; b.className = 'dl-btn loading'; });
+  data.job_ids.forEach((jobId, i) => {
+    const b = btns[i];
+    if (b) pollDownload(jobId, b);
+  });
 }
 
 async function pollDownload(jobId, btn) {

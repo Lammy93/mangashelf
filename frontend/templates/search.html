@@ -137,9 +137,9 @@
   </nav>
   <div id="sidebar-footer">
     <div class="sidebar-user">
-      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{{ user.username[0] if user and user.username else 'G' }}</div>
+      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
       <div class="user-info">
-        <div class="user-name">{{ user.username if user else 'Guest' }}</div>
+        <div class="user-name">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
         <div class="user-role">{{ user.role if user else '' }}</div>
       </div>
       <a href="/logout" class="logout-btn" title="Sign out">

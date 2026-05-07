@@ -141,9 +141,9 @@
   </nav>
   <div id="sidebar-footer">
     <div class="sidebar-user">
-      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{{ user.username[0] if user and user.username else 'G' }}</div>
+      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
       <div class="user-info">
-        <div class="user-name">{{ user.username if user else 'Guest' }}</div>
+        <div class="user-name">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
         <div class="user-role">{{ user.role if user else '' }}</div>
       </div>
       <a href="/logout" class="logout-btn" title="Sign out">
@@ -235,12 +235,14 @@ function renderHero() {
       <div class="hero-info">
         <div class="hero-title">${m.title}</div>
         <div class="hero-meta">
-          ${m.author ? `<span>${m.author}</span>` : ''}
-          ${m.total_volumes ? `<span class="badge badge-vol">${m.total_volumes} Volumes</span>` : ''}
-          <span>${m.total_chapters} Chapters</span>
+          ${m.author ? `<span>By ${m.author}</span>` : ''}
+          ${m.year ? `<span>(${m.year})</span>` : ''}
+          ${m.publisher ? `<span>${m.publisher}</span>` : ''}
+          ${m.total_chapters ? `<span class="badge badge-vol">${m.total_chapters} Chapters</span>` : ''}
           ${m.status ? `<span class="badge badge-status">${m.status}</span>` : ''}
         </div>
-        ${m.description ? `<div class="hero-desc">${m.description}</div>` : ''}
+        ${m.genre ? `<div style="margin-bottom:.5rem;"><span class="badge badge-vol">${m.genre}</span></div>` : ''}
+        ${m.summary ? `<div class="hero-desc">${m.summary}</div>` : ''}
         <div class="hero-actions">
           <button class="btn btn-primary" onclick="readFirst()">▶ Read First</button>
           <button class="btn btn-ghost" onclick="scrapeCover()">🖼 Fetch Cover</button>

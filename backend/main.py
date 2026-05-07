@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
+import xml.etree.ElementTree as ET
 import os, json, zipfile, rarfile, fitz, shutil, asyncio, aiohttp, uuid, base64, hmac, threading, time
 from pathlib import Path
 from datetime import datetime
@@ -31,6 +32,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 templates = Jinja2Templates(directory="/app/frontend/templates")
 app.mount("/static", StaticFiles(directory="/app/frontend/static"), name="static")
 app.mount("/manga-files", StaticFiles(directory=str(MANGA_DIR)), name="manga-files")
+(Path("/data/avatars").mkdir(parents=True, exist_ok=True))
+app.mount("/avatars", StaticFiles(directory="/data/avatars"), name="avatars")
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +50,17 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
+            avatar TEXT,
+            display_name TEXT,
             created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id TEXT PRIMARY KEY,
+            reading_mode TEXT DEFAULT 'single',
+            strip_scroll_sensitivity REAL DEFAULT 1.0,
+            auto_hide_toolbar INTEGER DEFAULT 1,
+            show_page_numbers INTEGER DEFAULT 1,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS manga_directories (
             id TEXT PRIMARY KEY,
@@ -75,7 +88,24 @@ def init_db():
             source_id TEXT,
             added_at TEXT,
             updated_at TEXT,
-            status TEXT DEFAULT 'local'
+            status TEXT DEFAULT 'local',
+            author TEXT,
+            artist TEXT,
+            genre TEXT,
+            summary TEXT,
+            publisher TEXT,
+            year INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS volumes (
+            id TEXT PRIMARY KEY,
+            manga_id TEXT,
+            volume_number INTEGER,
+            title TEXT,
+            path TEXT,
+            total_chapters INTEGER DEFAULT 0,
+            cover TEXT,
+            summary TEXT,
+            FOREIGN KEY (manga_id) REFERENCES manga(id)
         );
         CREATE TABLE IF NOT EXISTS chapters (
             id TEXT PRIMARY KEY,
@@ -88,7 +118,9 @@ def init_db():
             is_read INTEGER DEFAULT 0,
             source_url TEXT,
             downloaded INTEGER DEFAULT 0,
-            FOREIGN KEY (manga_id) REFERENCES manga(id)
+            volume_id TEXT,
+            FOREIGN KEY (manga_id) REFERENCES manga(id),
+            FOREIGN KEY (volume_id) REFERENCES volumes(id)
         );
         CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY,
@@ -150,8 +182,6 @@ def init_default_directory():
 
 init_default_directory()
 
-SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
-
 def is_first_launch():
     db = get_db()
     count = db.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
@@ -161,8 +191,8 @@ def is_first_launch():
 
 SESSION_SECRET = os.environ.get("SECRET_KEY", "change-this-to-a-long-random-string")
 
-def create_session_token(user_id: str, username: str, role: str) -> str:
-    payload = base64.b64encode(json.dumps({"uid": user_id, "user": username, "role": role}).encode()).decode()
+def create_session_token(user_id: str, username: str, role: str, display_name: str = None, avatar: str = None) -> str:
+    payload = base64.b64encode(json.dumps({"uid": user_id, "user": username, "role": role, "display_name": display_name, "avatar": avatar}).encode()).decode()
     sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
@@ -295,6 +325,50 @@ class ReadingModeUpdate(BaseModel):
 
 SUPPORTED_FORMATS = {'.cbz', '.cbr', '.pdf', '.zip', '.rar', '.epub'}
 
+def extract_metadata(file_path: Path) -> dict:
+    """Extract metadata from ComicInfo.xml in CBZ/CBR or PDF metadata."""
+    suffix = file_path.suffix.lower()
+    meta = {}
+
+    try:
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                names = z.namelist()
+                comic_info = next((n for n in names if n.lower().endswith('comicinfo.xml')), None)
+                if comic_info:
+                    with z.open(comic_info) as f:
+                        tree = ET.parse(f)
+                        root = tree.getroot()
+                        for tag in ['Series', 'Writer', 'Penciller', 'Genre', 'Summary', 'Publisher', 'Year', 'Volume', 'Number']:
+                            el = root.find(tag)
+                            if el is not None and el.text:
+                                meta[tag.lower()] = el.text.strip()
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                names = r.namelist()
+                comic_info = next((n for n in names if n.lower().endswith('comicinfo.xml')), None)
+                if comic_info:
+                    with r.open(comic_info) as f:
+                        tree = ET.parse(f)
+                        root = tree.getroot()
+                        for tag in ['Series', 'Writer', 'Penciller', 'Genre', 'Summary', 'Publisher', 'Year', 'Volume', 'Number']:
+                            el = root.find(tag)
+                            if el is not None and el.text:
+                                meta[tag.lower()] = el.text.strip()
+        elif suffix == '.pdf':
+            doc = fitz.open(str(file_path))
+            pdf_meta = doc.metadata
+            if pdf_meta:
+                if pdf_meta.get('author'):
+                    meta['writer'] = pdf_meta['author']
+                if pdf_meta.get('title'):
+                    meta['series'] = pdf_meta['title']
+                doc.close()
+    except:
+        pass
+
+    return meta
+
 def extract_pages(file_path: Path) -> List[str]:
     """Return list of page image paths or base64 for a chapter file."""
     suffix = file_path.suffix.lower()
@@ -342,6 +416,7 @@ def scan_manga_dir():
                         if f.suffix.lower() in SUPPORTED_FORMATS:
                             chapters.append(f)
                     if chapters:
+                        meta = extract_metadata(chapters[0])
                         db.execute(
     """
     INSERT OR IGNORE INTO manga (
@@ -357,12 +432,18 @@ def scan_manga_dir():
         source_id,
         added_at,
         updated_at,
-        status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status,
+        author,
+        artist,
+        genre,
+        summary,
+        publisher,
+        year
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
     (
         manga_id,
-        item.name,
+        meta.get('series') or item.name,
         str(item),
         None,
         len(chapters),
@@ -373,19 +454,41 @@ def scan_manga_dir():
         None,
         datetime.now().isoformat(),
         datetime.now().isoformat(),
-        'local'
+        'local',
+        meta.get('writer'),
+        meta.get('penciller'),
+        meta.get('genre'),
+        meta.get('summary'),
+        meta.get('publisher'),
+        int(meta['year']) if meta.get('year') and meta['year'].isdigit() else None
     )
 )
+                        volumes = {}
                         for i, ch in enumerate(chapters):
-                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                            ch_meta = extract_metadata(ch)
+                            vol_num = int(ch_meta.get('volume', 0)) if ch_meta.get('volume') and ch_meta['volume'].isdigit() else 0
+                            if vol_num not in volumes:
+                                volumes[vol_num] = {'chapters': [], 'meta': ch_meta}
+                            volumes[vol_num]['chapters'].append((i, ch))
+                        for vol_num, vol_data in volumes.items():
+                            vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}-v{vol_num}"))
+                            vol_meta = vol_data['meta']
                             db.execute(
-                                "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                (ch_id, manga_id, float(i+1), ch.stem, str(ch), 0, 0, 0, None, 1)
+                                "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path, total_chapters, cover, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                (vol_id, manga_id, vol_num, vol_meta.get('series') or f"Volume {vol_num}" if vol_num else "Volume 1", str(item), len(vol_data['chapters']), None, vol_meta.get('summary'))
                             )
+                            for i, ch in vol_data['chapters']:
+                                ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                                ch_num = float(ch_meta.get('number', i + 1)) if ch_meta.get('number') else float(i + 1)
+                                db.execute(
+                                    "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                    (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, vol_id)
+                                )
             elif item.suffix.lower() in SUPPORTED_FORMATS:
                 manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
                 if not existing:
+                    meta = extract_metadata(item)
                     db.execute("""
 INSERT OR IGNORE INTO manga (
     id,
@@ -400,11 +503,17 @@ INSERT OR IGNORE INTO manga (
     source_id,
     added_at,
     updated_at,
-    status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    status,
+    author,
+    artist,
+    genre,
+    summary,
+    publisher,
+    year
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """, (
     manga_id,
-    item.stem,
+    meta.get('series') or item.stem,
     str(item),
     None,
     1,
@@ -415,12 +524,18 @@ INSERT OR IGNORE INTO manga (
     None,
     datetime.now().isoformat(),
     datetime.now().isoformat(),
-    'local'
+    'local',
+    meta.get('writer'),
+    meta.get('penciller'),
+    meta.get('genre'),
+    meta.get('summary'),
+    meta.get('publisher'),
+    int(meta['year']) if meta.get('year') and meta['year'].isdigit() else None
 ))
                 ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 db.execute(
                     "INSERT OR IGNORE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1)
+                    (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
                 )
     db.commit()
     db.close()
@@ -471,8 +586,13 @@ async def setup_post(request: Request):
     )
     db.commit()
     user_row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    db.execute(
+        "INSERT OR IGNORE INTO user_settings (user_id, reading_mode, strip_scroll_sensitivity, auto_hide_toolbar, show_page_numbers) VALUES (?, ?, ?, ?, ?)",
+        (user_row["id"], "single", 1.0, 1, 1)
+    )
+    db.commit()
     db.close()
-    token = create_session_token(user_row["id"], user_row["username"], user_row["role"])
+    token = create_session_token(user_row["id"], user_row["username"], user_row["role"], user_row.get("display_name"), user_row.get("avatar"))
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response
@@ -493,7 +613,7 @@ async def login_post(request: Request):
     db.close()
     if not user or not verify_password(password, user["password_hash"]):
         return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password."})
-    token = create_session_token(user["id"], user["username"], user["role"])
+    token = create_session_token(user["id"], user["username"], user["role"], user.get("display_name"), user.get("avatar"))
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response
@@ -649,15 +769,146 @@ async def scan_now(request: Request):
     scan_manga_dir()
     return {"ok": True}
 
+@app.post("/api/scrape-all-covers")
+async def scrape_all_covers(request: Request):
+    require_admin(request)
+    def scrape_covers():
+        db = get_db()
+        rows = db.execute("SELECT id, title, path FROM manga WHERE cover IS NULL OR cover=''").fetchall()
+        for row in rows:
+            manga_path = Path(row["path"])
+            files = []
+            if manga_path.is_dir():
+                files = [f for f in sorted(manga_path.iterdir()) if f.suffix.lower() in SUPPORTED_FORMATS]
+            elif manga_path.suffix.lower() in SUPPORTED_FORMATS:
+                files = [manga_path]
+            if files:
+                try:
+                    pages = extract_pages(files[0])
+                    if pages:
+                        db.execute("UPDATE manga SET cover=? WHERE id=?", (pages[0], row["id"]))
+                except:
+                    pass
+        db.commit()
+        db.close()
+    threading.Thread(target=scrape_covers, daemon=True).start()
+    return {"ok": True}
+
+# ── Routes: API: User Settings ────────────────────────────────────────────────
+
+class UserSettingsUpdate(BaseModel):
+    reading_mode: Optional[str] = None
+    strip_scroll_sensitivity: Optional[float] = None
+    auto_hide_toolbar: Optional[bool] = None
+    show_page_numbers: Optional[bool] = None
+    display_name: Optional[str] = None
+
+@app.get("/api/me")
+async def get_me(request: Request):
+    user = require_auth(request)
+    db = get_db()
+    u = db.execute("SELECT id, username, role, display_name, avatar, created_at FROM users WHERE id=?", (user["uid"],)).fetchone()
+    settings = db.execute("SELECT * FROM user_settings WHERE user_id=?", (user["uid"],)).fetchone()
+    db.close()
+    result = dict(u) if u else {}
+    if settings:
+        result["settings"] = dict(settings)
+    else:
+        result["settings"] = {"reading_mode": "single", "strip_scroll_sensitivity": 1.0, "auto_hide_toolbar": 1, "show_page_numbers": 1}
+    return result
+
+@app.post("/api/me")
+async def update_me(data: UserSettingsUpdate, request: Request):
+    user = require_auth(request)
+    db = get_db()
+    u = db.execute("SELECT display_name, avatar FROM users WHERE id=?", (user["uid"],)).fetchone()
+    if data.display_name is not None:
+        db.execute("UPDATE users SET display_name=? WHERE id=?", (data.display_name, user["uid"]))
+        u = db.execute("SELECT display_name, avatar FROM users WHERE id=?", (user["uid"],)).fetchone()
+    if data.reading_mode is not None or data.strip_scroll_sensitivity is not None or data.auto_hide_toolbar is not None or data.show_page_numbers is not None:
+        db.execute(
+            "INSERT OR REPLACE INTO user_settings (user_id, reading_mode, strip_scroll_sensitivity, auto_hide_toolbar, show_page_numbers) SELECT ?, COALESCE(?, reading_mode), COALESCE(?, strip_scroll_sensitivity), COALESCE(?, auto_hide_toolbar), COALESCE(?, show_page_numbers) FROM user_settings WHERE user_id=?",
+            (user["uid"], data.reading_mode, data.strip_scroll_sensitivity, int(data.auto_hide_toolbar) if data.auto_hide_toolbar is not None else None, int(data.show_page_numbers) if data.show_page_numbers is not None else None, user["uid"])
+        )
+    db.commit()
+    db.close()
+    token = create_session_token(user["uid"], user["user"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+    return response
+
+@app.post("/api/me/avatar")
+async def upload_avatar(request: Request):
+    user = require_auth(request)
+    form = await request.form()
+    avatar_file = form.get("avatar")
+    if not avatar_file or not hasattr(avatar_file, 'read'):
+        raise HTTPException(400, "No file uploaded.")
+    content = await avatar_file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 5MB).")
+    avatar_dir = Path("/data/avatars")
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    avatar_path = avatar_dir / f"{user['uid']}.png"
+    with open(avatar_path, "wb") as f:
+        f.write(content)
+    db = get_db()
+    avatar_url = f"/avatars/{user['uid']}.png"
+    db.execute("UPDATE users SET avatar=? WHERE id=?", (avatar_url, user["uid"]))
+    db.commit()
+    u = db.execute("SELECT display_name, avatar FROM users WHERE id=?", (user["uid"],)).fetchone()
+    db.close()
+    token = create_session_token(user["uid"], user["user"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
+    response = JSONResponse({"ok": True, "avatar": avatar_url})
+    response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
+    return response
+
+@app.post("/api/manga/{manga_id}/scrape-cover")
+async def scrape_manga_cover(manga_id: str, request: Request):
+    require_admin(request)
+    def do_scrape():
+        db = get_db()
+        manga = db.execute("SELECT path FROM manga WHERE id=?", (manga_id,)).fetchone()
+        if manga:
+            manga_path = Path(manga["path"])
+            files = []
+            if manga_path.is_dir():
+                files = [f for f in sorted(manga_path.iterdir()) if f.suffix.lower() in SUPPORTED_FORMATS]
+            elif manga_path.suffix.lower() in SUPPORTED_FORMATS:
+                files = [manga_path]
+            if files:
+                try:
+                    pages = extract_pages(files[0])
+                    if pages:
+                        db.execute("UPDATE manga SET cover=? WHERE id=?", (pages[0], manga_id))
+                        db.commit()
+                except:
+                    pass
+        db.close()
+    threading.Thread(target=do_scrape, daemon=True).start()
+    return {"ok": True}
+
 @app.get("/api/manga/{manga_id}")
-async def get_manga(manga_id: str):
+async def get_manga(manga_id: str, request: Request):
+    user = require_auth(request)
     db = get_db()
     manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
     if not manga:
+        db.close()
         raise HTTPException(404, "Manga not found")
+    volumes = db.execute("SELECT * FROM volumes WHERE manga_id=? ORDER BY volume_number", (manga_id,)).fetchall()
     chapters = db.execute("SELECT * FROM chapters WHERE manga_id=? ORDER BY chapter_number", (manga_id,)).fetchall()
+    progress_rows = db.execute(
+        "SELECT c.id, c.is_read, c.read_page, c.pages FROM chapters c WHERE c.manga_id=?", (manga_id,)
+    ).fetchall()
     db.close()
-    return {"manga": dict(manga), "chapters": [dict(c) for c in chapters]}
+    progress = {r["id"]: {"is_read": r["is_read"], "page": r["read_page"], "pages": r["pages"]} for r in progress_rows}
+    return {
+        "manga": dict(manga),
+        "volumes": [dict(v) for v in volumes],
+        "chapters": [dict(c) for c in chapters],
+        "progress": progress
+    }
 
 @app.get("/api/chapter/{chapter_id}/pages")
 async def get_pages(chapter_id: str):

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/png" href="/static/img/favicon.ico">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings — MangaShelf</title>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d0d0f;--surface:#16161a;--surface2:#1e1e24;--border:#2a2a35;--accent:#e8403a;--accent2:#ff7a35;--text:#eeeef0;--muted:#7a7a8c;--radius:10px;--sidebar-w:240px;--sidebar-collapsed:60px;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
+
+  #sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100;transition:width .3s ease;overflow:hidden;}
+  #sidebar.collapsed{width:var(--sidebar-collapsed);}
+  #sidebar-header{display:flex;align-items:center;padding:.75rem;gap:.5rem;border-bottom:1px solid var(--border);min-height:60px;}
+  #sidebar-logo{flex-shrink:0;height:36px;width:36px;border-radius:8px;object-fit:cover;}
+  #sidebar-logo-wrap{display:flex;align-items:center;gap:.5rem;text-decoration:none;overflow:hidden;}
+  #sidebar-title{font-family:'Dela Gothic One',sans-serif;font-size:1rem;white-space:nowrap;opacity:1;transition:opacity .2s;}
+  #sidebar.collapsed #sidebar-title{opacity:0;pointer-events:none;}
+  #toggle-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:6px;transition:all .2s;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  #toggle-btn:hover{color:var(--text);background:var(--surface2);}
+  #toggle-btn svg{width:20px;height:20px;}
+  #sidebar.collapsed #toggle-btn svg{transform:rotate(180deg);}
+  #sidebar-nav{flex:1;padding:.75rem;display:flex;flex-direction:column;gap:.25rem;}
+  .nav-item{display:flex;align-items:center;gap:.75rem;padding:.65rem .75rem;border-radius:8px;color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500;transition:all .2s;white-space:nowrap;overflow:hidden;}
+  .nav-item:hover{color:var(--text);background:var(--surface2);}
+  .nav-item.active{color:var(--text);background:var(--surface2);border-left:3px solid var(--accent);}
+  .nav-item svg{width:18px;height:18px;flex-shrink:0;}
+  .nav-item span{opacity:1;transition:opacity .2s;}
+  #sidebar.collapsed .nav-item span{opacity:0;pointer-events:none;}
+  #sidebar-footer{padding:.75rem;border-top:1px solid var(--border);}
+  .sidebar-user{display:flex;align-items:center;gap:.75rem;padding:.5rem .75rem;border-radius:8px;background:var(--surface2);overflow:hidden;}
+  .user-avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:#fff;flex-shrink:0;overflow:hidden;}
+  .user-avatar img{width:100%;height:100%;object-fit:cover;}
+  .user-avatar.admin-av{background:var(--accent);}
+  .user-info{flex:1;min-width:0;transition:opacity .2s;}
+  #sidebar.collapsed .user-info{opacity:0;pointer-events:none;}
+  .user-name{font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .user-role{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+  .logout-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:4px;transition:all .2s;flex-shrink:0;}
+  .logout-btn:hover{color:var(--accent);}
+
+  #overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;opacity:0;pointer-events:none;transition:opacity .3s;}
+  #overlay.active{opacity:1;pointer-events:auto;}
+
+  #main{margin-left:var(--sidebar-w);transition:margin-left .3s ease;padding-bottom:2rem;}
+  #main.expanded{margin-left:var(--sidebar-collapsed);}
+
+  .top-bar{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;height:60px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:50;}
+  #menu-btn{display:none;background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;border-radius:6px;transition:all .2s;}
+  #menu-btn:hover{color:var(--text);background:var(--surface2);}
+  .top-bar-title{font-family:'Dela Gothic One',sans-serif;font-size:1rem;}
+
+  .btn{padding:.5rem 1rem;border-radius:7px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;}
+  .btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{background:#c93530;}
+  .btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border);}.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+
+  .page-content{padding:1.5rem;max-width:700px;}
+  h1{font-family:'Dela Gothic One',sans-serif;font-size:1.5rem;margin-bottom:.5rem;}
+  .subtitle{color:var(--muted);font-size:.9rem;margin-bottom:2rem;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-bottom:1.5rem;}
+  .card h2{font-family:'Dela Gothic One',sans-serif;font-size:1rem;margin-bottom:1.25rem;}
+  .form-row{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem;}
+  input.field,select.field{flex:1;min-width:140px;padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;}
+  input.field:focus,select.field:focus{border-color:var(--accent);}
+
+  /* PROFILE */
+  .profile-section{display:flex;align-items:center;gap:1.5rem;margin-bottom:1rem;}
+  .profile-avatar{width:80px;height:80px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:700;color:#fff;flex-shrink:0;overflow:hidden;cursor:pointer;position:relative;}
+  .profile-avatar img{width:100%;height:100%;object-fit:cover;}
+  .profile-avatar:hover::after{content:'📷';position:absolute;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-size:1.5rem;}
+  .profile-info{flex:1;}
+  .profile-info label{display:block;font-size:.7rem;font-weight:600;color:var(--muted);margin-bottom:.3rem;letter-spacing:.5px;text-transform:uppercase;}
+  #profile-username{font-size:1.1rem;font-weight:700;margin-bottom:.5rem;}
+
+  /* TOGGLE */
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.75rem 0;border-bottom:1px solid var(--border);}
+  .toggle-row:last-child{border-bottom:none;}
+  .toggle-label{font-size:.9rem;font-weight:500;}
+  .toggle-desc{font-size:.75rem;color:var(--muted);margin-top:.15rem;}
+  .toggle{position:relative;width:44px;height:24px;flex-shrink:0;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .slider{position:absolute;inset:0;background:var(--border);border-radius:20px;cursor:pointer;transition:.2s;}
+  .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.2s;}
+  input:checked+.slider{background:var(--accent);}
+  input:checked+.slider:before{transform:translateX(20px);background:#fff;}
+
+  .status-msg{font-size:.8rem;padding:.5rem .75rem;border-radius:6px;margin-top:.5rem;display:none;}
+  .status-msg.success{display:block;background:rgba(74,222,128,.1);color:#4ade80;border:1px solid rgba(74,222,128,.2);}
+
+  @media (max-width: 768px) {
+    #sidebar{transform:translateX(-100%);width:var(--sidebar-w) !important;}
+    #sidebar.mobile-open{transform:translateX(0);}
+    #toggle-btn{display:none !important;}
+    #menu-btn{display:flex !important;}
+    #main{margin-left:0 !important;}
+  }
+</style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <a id="sidebar-logo-wrap" href="/">
+      <img id="sidebar-logo" src="/static/img/logo.png" alt="MangaShelf">
+      <span id="sidebar-title">MangaShelf</span>
+    </a>
+    <button id="toggle-btn" onclick="toggleSidebar()" title="Toggle sidebar">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+    </button>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="/" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      <span>Library</span>
+    </a>
+    <a href="/search" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      <span>Discover</span>
+    </a>
+    <a href="/sources" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+      <span>Sources</span>
+    </a>
+    <a href="/settings" class="nav-item active">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      <span>Settings</span>
+    </a>
+    {% if user and user.role == 'admin' %}
+    <a href="/admin" class="nav-item">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      <span>Admin</span>
+    </a>
+    {% endif %}
+  </nav>
+  <div id="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}" id="sidebar-avatar">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
+      <div class="user-info">
+        <div class="user-name" id="sidebar-username">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
+        <div class="user-role">{{ user.role if user else '' }}</div>
+      </div>
+      <a href="/logout" class="logout-btn" title="Sign out">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+      </a>
+    </div>
+  </div>
+</aside>
+
+<div id="overlay" onclick="closeMobileSidebar()"></div>
+
+<div id="main">
+  <div class="top-bar">
+    <button id="menu-btn" onclick="openMobileSidebar()">
+      <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="top-bar-title">Settings</div>
+  </div>
+  <div class="page-content">
+    <h1>Settings</h1>
+    <p class="subtitle">Manage your profile and reading preferences.</p>
+
+    <div class="card">
+      <h2>Profile</h2>
+      <div class="profile-section">
+        <div class="profile-avatar" id="profile-avatar" onclick="document.getElementById('avatar-input').click()">
+          {% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}
+        </div>
+        <input type="file" id="avatar-input" accept="image/*" style="display:none" onchange="uploadAvatar(this)">
+        <div class="profile-info">
+          <div id="profile-username">{{ user.display_name if user and user.display_name else user.username }}</div>
+          <label>Username</label>
+          <input class="field" type="text" id="display-name" value="{{ user.display_name if user and user.display_name else user.username }}" placeholder="Display name" onchange="saveProfile()">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Reader Settings</h2>
+      <div class="form-row">
+        <div style="flex:1;">
+          <label style="display:block;font-size:.7rem;font-weight:600;color:var(--muted);margin-bottom:.3rem;letter-spacing:.5px;text-transform:uppercase;">Default Reading Mode</label>
+          <select class="field" id="reading-mode" onchange="saveSettings()">
+            <option value="single">Single Page</option>
+            <option value="double">Double Page Spread</option>
+            <option value="strip">Vertical Strip</option>
+          </select>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Auto-hide toolbar</div>
+          <div class="toggle-desc">Hide toolbar while reading for immersive view</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="auto-hide-toolbar" checked onchange="saveSettings()">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Show page numbers</div>
+          <div class="toggle-desc">Display current page / total in toolbar</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="show-page-numbers" checked onchange="saveSettings()">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="save-status" class="status-msg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+  document.getElementById('main').classList.toggle('expanded');
+  localStorage.setItem('sidebarCollapsed', document.getElementById('sidebar').classList.contains('collapsed'));
+}
+
+function openMobileSidebar() {
+  document.getElementById('sidebar').classList.add('mobile-open');
+  document.getElementById('overlay').classList.add('active');
+}
+
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('mobile-open');
+  document.getElementById('overlay').classList.remove('active');
+}
+
+(function() {
+  const collapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+  if (collapsed) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.getElementById('main').classList.add('expanded');
+  }
+})();
+
+async function loadSettings() {
+  const res = await fetch('/api/me');
+  if (!res.ok) return;
+  const data = await res.json();
+  const s = data.settings || {};
+  document.getElementById('reading-mode').value = s.reading_mode || 'single';
+  document.getElementById('auto-hide-toolbar').checked = s.auto_hide_toolbar !== 0;
+  document.getElementById('show-page-numbers').checked = s.show_page_numbers !== 0;
+  if (data.display_name) {
+    document.getElementById('display-name').value = data.display_name;
+    document.getElementById('profile-username').textContent = data.display_name;
+  }
+  if (data.avatar) {
+    const avatarHtml = `<img src="${data.avatar}" alt="">`;
+    document.getElementById('profile-avatar').innerHTML = avatarHtml;
+    document.getElementById('sidebar-avatar').innerHTML = avatarHtml;
+  } else if (data.display_name) {
+    const initial = data.display_name[0].toUpperCase();
+    document.getElementById('sidebar-avatar').textContent = initial;
+  }
+}
+
+async function saveProfile() {
+  const name = document.getElementById('display-name').value.trim();
+  if (!name) return;
+  await fetch('/api/me', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({display_name: name})
+  });
+  document.getElementById('profile-username').textContent = name;
+  document.getElementById('sidebar-username').textContent = name;
+}
+
+async function saveSettings() {
+  const mode = document.getElementById('reading-mode').value;
+  const toolbar = document.getElementById('auto-hide-toolbar').checked;
+  const pages = document.getElementById('show-page-numbers').checked;
+  await fetch('/api/me', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reading_mode: mode, auto_hide_toolbar: toolbar, show_page_numbers: pages})
+  });
+  const msg = document.getElementById('save-status');
+  msg.className = 'status-msg success'; msg.textContent = 'Settings saved.';
+  setTimeout(() => { msg.className = 'status-msg'; msg.textContent = ''; }, 3000);
+}
+
+async function uploadAvatar(input) {
+  if (!input.files.length) return;
+  const form = new FormData();
+  form.append('avatar', input.files[0]);
+  const res = await fetch('/api/me/avatar', {method:'POST', body:form});
+  if (res.ok) {
+    const url = URL.createObjectURL(input.files[0]);
+    const html = `<img src="${url}" alt="">`;
+    document.getElementById('profile-avatar').innerHTML = html;
+    document.getElementById('sidebar-avatar').innerHTML = html;
+  }
+}
+
+loadSettings();
+</script>
+</body>
+</html>

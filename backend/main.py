@@ -601,6 +601,7 @@ def scan_manga_dir():
                 all_items.append((scan_path, item))
     _set_scan_progress(total=len(all_items), message="Scanning...")
     db = get_db()
+    new_manga_for_meta = []
     for scan_path, item in all_items:
         if item.is_dir():
             manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
@@ -615,7 +616,7 @@ def scan_manga_dir():
                     if nfo and nfo.get("title"):
                         meta = nfo
                     else:
-                        meta = extract_metadata(chapters[0])
+                        meta = {}
                     db.execute(
     """
     INSERT OR IGNORE INTO manga (
@@ -662,33 +663,22 @@ def scan_manga_dir():
         meta.get('year')
     )
 )
-                    volumes = {}
                     for i, ch in enumerate(chapters):
-                        ch_meta = extract_metadata(ch)
-                        vol_num = int(ch_meta.get('volume', 0)) if ch_meta.get('volume') and ch_meta['volume'].isdigit() else 0
-                        if vol_num not in volumes:
-                            volumes[vol_num] = {'chapters': [], 'meta': ch_meta}
-                        volumes[vol_num]['chapters'].append((i, ch))
-                    for vol_num, vol_data in volumes.items():
-                        vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}-v{vol_num}"))
-                        vol_meta = vol_data['meta']
+                        ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                        ch_num = float(i + 1)
                         db.execute(
-                            "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path, total_chapters, cover, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            (vol_id, manga_id, vol_num, vol_meta.get('series') or f"Volume {vol_num}" if vol_num else "Volume 1", str(item), len(vol_data['chapters']), None, vol_meta.get('summary'))
+                            "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None)
                         )
-                        for i, ch in vol_data['chapters']:
-                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
-                            ch_num = float(ch_meta.get('number', i + 1)) if ch_meta.get('number') else float(i + 1)
-                            db.execute(
-                                "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, vol_id)
-                            )
-                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": meta.get('title') or meta.get('series') or item.name})
+                    title = meta.get('title') or meta.get('series') or item.name
+                    _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
+                    if not nfo or not nfo.get("title") or not nfo.get("author"):
+                        new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
         elif item.suffix.lower() in SUPPORTED_FORMATS:
             manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
             existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
             if not existing:
-                meta = extract_metadata(item)
+                meta = {}
                 db.execute("""
 INSERT OR IGNORE INTO manga (
     id,
@@ -713,7 +703,7 @@ INSERT OR IGNORE INTO manga (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """, (
     manga_id,
-    meta.get('series') or item.stem,
+    item.stem,
     str(item),
     None,
     1,
@@ -725,25 +715,26 @@ INSERT OR IGNORE INTO manga (
     datetime.now().isoformat(),
     datetime.now().isoformat(),
     'local',
-    meta.get('writer'),
-    meta.get('penciller'),
-    meta.get('genre'),
-    meta.get('summary'),
-    meta.get('publisher'),
-    int(meta['year']) if meta.get('year') and meta['year'].isdigit() else None
+    None,
+    None,
+    None,
+    None,
+    None,
+    None
 ))
                 ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
                 db.execute(
                     "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None)
                 )
-                _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": meta.get('series') or item.stem})
+                _scan_progress["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
+                new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
         _set_scan_progress(current=_scan_progress["current"] + 1, message=f"Scanned {_scan_progress['current']}/{_scan_progress['total']}")
     db.commit()
     db.close()
     new_count = len(_scan_progress["new_manga"])
-    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
-    for nm in _scan_progress["new_manga"]:
+    _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series. Fetching metadata..." if new_count else "Scan complete. No new series.")
+    for nm in new_manga_for_meta:
         threading.Thread(target=auto_fetch_metadata, args=(nm["id"], nm["path"], nm["title"]), daemon=True).start()
     _set_scan_progress(running=False, message=f"Scan complete. Found {new_count} new series. Fetching metadata..." if new_count else "Scan complete. No new series.")
 

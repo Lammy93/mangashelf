@@ -157,7 +157,7 @@
   </nav>
   <div id="sidebar-footer">
     <div class="sidebar-user" onclick="window.location='/settings'" style="cursor:pointer;">
-      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% else %}{{ user.display_name[0] if user and user.display_name else user.username[0] if user and user.username else 'G' }}{% endif %}</div>
+      <div class="user-avatar{% if user and user.role == 'admin' %} admin-av{% endif %}">{% if user and user.avatar %}<img src="{{ user.avatar }}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">{% elif user and (user.display_name or user.username) %}{{ (user.display_name or user.username)[0] }}{% else %}G{% endif %}</div>
       <div class="user-info">
         <div class="user-name">{{ user.display_name if user and user.display_name else user.username if user else 'Guest' }}</div>
         <div class="user-role">{{ user.role if user else '' }}</div>
@@ -193,6 +193,21 @@
     <div class="tab-content" id="tab-chapters">
       <div class="chapter-list" id="all-chapters"></div>
     </div>
+  </div>
+</div>
+
+<div id="edit-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:1rem;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border);">
+      <h3 style="font-family:'Dela Gothic One',sans-serif;font-size:1rem;">Edit Details</h3>
+      <button onclick="closeEditModal()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+    </div>
+    <div id="edit-form" style="padding:1.25rem;overflow-y:auto;display:flex;flex-direction:column;gap:.75rem;"></div>
+    <div style="display:flex;gap:.75rem;padding:1rem 1.25rem;border-top:1px solid var(--border);">
+      <button class="btn btn-primary" onclick="saveEdit()" style="flex:1;">Save</button>
+      <button class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+    </div>
+    <div id="edit-status" style="padding:0 1.25rem .75rem;font-size:.8rem;color:var(--muted);"></div>
   </div>
 </div>
 

@@ -258,7 +258,7 @@ async function loadSources() {
   const res = await fetch('/api/sources');
   sources = await res.json();
   const sel = document.getElementById('source-sel');
-  sel.innerHTML = sources.filter(s=>s.enabled && s.type === 'mangadex').map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  sel.innerHTML = sources.filter(s=>s.enabled && s.type !== 'metadata').map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 }
 
 async function doSearch() {

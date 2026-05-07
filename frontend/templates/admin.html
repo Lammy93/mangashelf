@@ -130,18 +130,8 @@
       </div>
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">Watch for changes</div>
-          <div class="toggle-desc">Detect new files and trigger scan automatically</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="watch-toggle" checked onchange="saveScanSettings()">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="toggle-row">
-        <div>
           <div class="toggle-label">Scan on folder change</div>
-          <div class="toggle-desc">Trigger a full scan when new files/folders are detected</div>
+          <div class="toggle-desc">Detect new files and trigger a scan automatically</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="folder-change-toggle" checked onchange="saveScanSettings()">
@@ -218,7 +208,6 @@ async function loadScanSettings() {
   const s = await res.json();
   document.getElementById('scan-interval').value = s.scan_interval;
   document.getElementById('auto-scan-toggle').checked = s.auto_scan_enabled;
-  document.getElementById('watch-toggle').checked = s.watch_enabled;
   document.getElementById('folder-change-toggle').checked = s.scan_on_folder_change;
   renderDirs(s.directories);
 }
@@ -226,11 +215,10 @@ async function loadScanSettings() {
 async function saveScanSettings() {
   const interval = parseInt(document.getElementById('scan-interval').value) || 300;
   const auto = document.getElementById('auto-scan-toggle').checked;
-  const watch = document.getElementById('watch-toggle').checked;
   const folderChange = document.getElementById('folder-change-toggle').checked;
   await fetch('/api/scan-settings', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({scan_interval: interval, auto_scan_enabled: auto, watch_enabled: watch, scan_on_folder_change: folderChange})
+    body: JSON.stringify({scan_interval: interval, auto_scan_enabled: auto, scan_on_folder_change: folderChange})
   });
 }
 

@@ -189,7 +189,6 @@
     <div class="top-bar-title">Library</div>
     <div class="top-actions">
       <a href="/search" class="btn btn-primary">+ Add Manga</a>
-      <button class="btn btn-ghost" onclick="scrapeAllCovers()">🖼 Scrape Covers</button>
     </div>
   </div>
 
@@ -325,7 +324,7 @@ async function loadLibrary(q = '') {
 
 function renderCard(m) {
   const volBadge = m.total_volumes > 0 ? `<span class="badge badge-vol">${m.total_volumes} vol</span>` : '';
-  const chBadge = `${m.total_chapters} ch`;
+  const chBadge = `${m.downloaded_chapters} ch`;
   const cover = m.cover
     ? `<img src="${m.cover}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'">`
     : `<div class="no-cover">📖</div>`;
@@ -345,14 +344,6 @@ function renderCard(m) {
 }
 
 function filterLibrary(q) { loadLibrary(q); }
-
-async function scrapeAllCovers() {
-  const btn = event.target;
-  btn.textContent = '⏳ Scraping…'; btn.disabled = true;
-  await fetch('/api/scrape-all-covers', {method:'POST'});
-  btn.textContent = '✓ Started';
-  setTimeout(() => { btn.textContent = '🖼 Scrape Covers'; btn.disabled = false; loadLibrary(); }, 3000);
-}
 
 async function openEditModal(mangaId) {
   editMangaId = mangaId;

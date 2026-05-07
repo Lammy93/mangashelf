@@ -786,9 +786,22 @@ async def search_page(request: Request):
 async def get_library(q: str = ""):
     db = get_db()
     if q:
-        rows = db.execute("SELECT * FROM manga WHERE title LIKE ? ORDER BY title", (f"%{q}%",)).fetchall()
+        rows = db.execute("""
+            SELECT m.*, COUNT(c.id) as downloaded_chapters
+            FROM manga m
+            LEFT JOIN chapters c ON c.manga_id = m.id
+            WHERE m.title LIKE ?
+            GROUP BY m.id
+            ORDER BY m.title
+        """, (f"%{q}%",)).fetchall()
     else:
-        rows = db.execute("SELECT * FROM manga ORDER BY title").fetchall()
+        rows = db.execute("""
+            SELECT m.*, COUNT(c.id) as downloaded_chapters
+            FROM manga m
+            LEFT JOIN chapters c ON c.manga_id = m.id
+            GROUP BY m.id
+            ORDER BY m.title
+        """).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -983,7 +996,7 @@ async def update_me(data: UserSettingsUpdate, request: Request):
         )
     db.commit()
     db.close()
-    token = create_session_token(user["uid"], user["user"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
+    token = create_session_token(user["uid"], user["username"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
     response = JSONResponse({"ok": True})
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response
@@ -1013,7 +1026,7 @@ async def upload_avatar(request: Request):
     db.commit()
     u = db.execute("SELECT display_name, avatar FROM users WHERE id=?", (user["uid"],)).fetchone()
     db.close()
-    token = create_session_token(user["uid"], user["user"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
+    token = create_session_token(user["uid"], user["username"], user["role"], u["display_name"] if u else None, u["avatar"] if u else None)
     response = JSONResponse({"ok": True, "avatar": avatar_url})
     response.set_cookie(key="session", value=token, httponly=True, max_age=86400 * 7, samesite="lax")
     return response

@@ -203,10 +203,16 @@ async function loadSources() {
   const res = await fetch('/api/sources');
   const sources = await res.json();
   const list = document.getElementById('sources-list');
-  if (!sources.length) { list.innerHTML = '<p style="color:var(--muted);font-size:.875rem;">No sources configured.</p>'; return; }
-  list.innerHTML = sources.map(s => `
-    <div class="source-row" id="src-${s.id}">
-      <div class="source-icon">${s.type === 'mangadex' ? '🌐' : s.type === 'mangasee' ? '📚' : '🔗'}</div>
+  const filtered = sources.filter(s => !['anilist', 'myanimelist'].includes(s.id) && s.type !== 'metadata');
+  if (!filtered.length) { list.innerHTML = '<p style="color:var(--muted);font-size:.875rem;">No sources configured.</p>'; return; }
+  list.innerHTML = filtered.map(s => {
+    let icon = '🔗';
+    if (s.id === 'mangadex') icon = '🌐';
+    else if (s.id === 'mangasee') icon = '📚';
+    else if (s.id === 'mangakakalot') icon = '📖';
+    else if (s.id === 'mangafox') icon = '🦊';
+    return `<div class="source-row" id="src-${s.id}">
+      <div class="source-icon">${icon}</div>
       <div class="source-info">
         <div class="source-name">${s.name} <span class="badge ${s.type==='custom'?'badge-custom':'badge-builtin'}">${s.type}</span> ${!s.enabled?'<span class="badge badge-off">OFF</span>':''}</div>
         <div class="source-url">${s.base_url}</div>
@@ -216,7 +222,8 @@ async function loadSources() {
         <span class="slider"></span>
       </label>
       ${s.type==='custom'?`<button class="btn btn-danger" onclick="deleteSource('${s.id}')">✕</button>`:''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function addSource() {

@@ -237,6 +237,7 @@ function closeMobileSidebar() {
 })();
 
 const MANGA_ID = "{{ manga_id }}";
+const MANGA_SLUG = "{{ slug }}";
 let data = null;
 let activeVol = null;
 
@@ -323,7 +324,7 @@ function chaptersHtml(chapters) {
     const prog = data.progress[c.id];
     const isRead = prog?.is_read;
     const readDot = prog && prog.page > 0 && !isRead ? '<div class="ch-read-dot"></div>' : '';
-    return `<a class="chapter-item ${isRead ? 'is-read' : ''}" href="/read/${MANGA_ID}/${c.id}">
+    return `<a class="chapter-item ${isRead ? 'is-read' : ''}" href="/read/${MANGA_SLUG}/${c.id}">
       <div class="ch-left">
         <span class="ch-num">Ch.${c.chapter_number}</span>
         <span class="ch-title">${c.title || ''}</span>
@@ -346,7 +347,7 @@ function switchTab(tab) {
 
 async function readFirst() {
   const first = data.chapters[0];
-  if (first) window.location = `/read/${MANGA_ID}/${first.id}`;
+  if (first) window.location = `/read/${MANGA_SLUG}/${first.id}`;
 }
 
 async function autoFetchMetadataIfMissing() {

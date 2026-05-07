@@ -189,7 +189,7 @@ async function loadFavorites() {
   grid.innerHTML = favs.map(m => {
     const dc = m.downloaded_chapters ?? 0;
     const cover = m.cover ? `<img src="${m.cover}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'">` : `<div class="no-cover">📖</div>`;
-    return `<div class="card" onclick="window.location='/manga/${m.id}'">
+    return `<div class="card" onclick="window.location='/manga/${m.slug || m.id}'">
       <div class="card-cover">${cover}
         <button class="fav-heart" onclick="event.stopPropagation();removeFavorite('${m.id}')" title="Remove from favorites">
           <svg fill="currentColor" viewBox="0 0 24 24"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>

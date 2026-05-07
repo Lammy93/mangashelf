@@ -300,7 +300,7 @@ async function loadHome() {
     document.getElementById('continue-section').style.display = 'block';
     document.getElementById('continue-row').innerHTML = continueData.map(m => {
       const pct = m.pages > 0 ? (m.page / m.pages * 100) : 0;
-      return `<div class="continue-card" onclick="window.location='/read/${m.id}/${m.chapter_id}'">
+      return `<div class="continue-card" onclick="window.location='/read/${m.slug || m.id}/${m.chapter_id}'">
         <div class="continue-cover"><img src="${m.cover || ''}" onerror="this.style.display='none'" alt=""></div>
         <div class="continue-info">
           <div class="continue-title">${m.title}</div>
@@ -336,7 +336,7 @@ function renderCard(m) {
   const cover = m.cover
     ? `<img src="${m.cover}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'">`
     : `<div class="no-cover">📖</div>`;
-  return `<div class="card" onclick="window.location='/manga/${m.id}'">
+  return `<div class="card" onclick="window.location='/manga/${m.slug || m.id}'">
     <div class="card-cover">
       ${cover}
       <div class="card-progress"><div class="card-progress-bar" style="width:0%"></div></div>

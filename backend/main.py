@@ -599,7 +599,7 @@ def extract_pages(file_path: Path) -> List[str]:
                 pix.save(str(out_dir / f"page_{i:04d}.png"))
             doc.close()
         except Exception as e:
-            logger.warning(f"[pages] PDF error for {file_path.name}: {e}
+            logger.warning(f"[pages] PDF error for {file_path.name}: {e}")
 
     pages = sorted([f for f in out_dir.iterdir() if f.suffix in {'.jpg','.jpeg','.png','.webp','.gif'}])
     return [f"/cache/{file_path.stem}/{p.name}" for p in pages]

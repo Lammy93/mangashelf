@@ -97,6 +97,9 @@
   .ch-read-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);}
   .scrape-cover-btn{padding:.3rem .6rem;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.72rem;cursor:pointer;font-family:inherit;transition:all .2s;}
   .scrape-cover-btn:hover{border-color:var(--accent2);color:var(--accent2);}
+  .field{padding:.6rem .9rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;font-size:.875rem;outline:none;transition:border-color .2s;font-family:inherit;width:100%;}
+  .field:focus{border-color:var(--accent);}
+  select.field{cursor:pointer;}
   .meta-search{padding:.5rem 0;}
   .meta-search-row{display:flex;gap:.75rem;margin-bottom:1.25rem;}
   .meta-search-row select{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:.5rem .9rem;font-size:.85rem;font-family:inherit;outline:none;}
@@ -274,6 +277,7 @@ function renderHero() {
         <div class="hero-actions">
           <button class="btn btn-primary" onclick="readFirst()">▶ Read First</button>
           <button class="btn btn-ghost" onclick="scrapeCover()">🖼 Fetch Cover</button>
+          <button class="btn btn-ghost" onclick="openEditModal()">✎ Edit</button>
         </div>
       </div>
     </div>`;
@@ -364,14 +368,16 @@ async function searchMetadata() {
         <div class="meta-result-title">${r.title}</div>
         <div class="meta-result-meta">${r.status||''} ${r.chapters ? '• '+r.chapters+' ch' : ''} ${r.format ? '• '+r.format : ''}</div>
       </div>
-      <button class="meta-apply-btn" onclick="applyMetadata('${r.id}','${source}',this)">Apply</button>
+      <button class="meta-apply-btn" onclick="applyMetadata('${r.id}','${source}','${r.cover||''}',this)">Apply</button>
     </div>
   `).join('');
 }
 
-async function applyMetadata(externalId, source, btn) {
+async function applyMetadata(externalId, source, cover, btn) {
   btn.textContent = 'Applying…'; btn.disabled = true;
-  const res = await fetch(`/api/manga/${MANGA_ID}/metadata?source=${source}&external_id=${externalId}`);
+  const params = new URLSearchParams({source, external_id: externalId});
+  if (cover) params.set('cover', cover);
+  const res = await fetch(`/api/manga/${MANGA_ID}/metadata?${params.toString()}`);
   const result = await res.json();
   if (result.ok) {
     btn.textContent = '✓ Applied'; btn.className = 'meta-apply-btn applied';
@@ -382,6 +388,82 @@ async function applyMetadata(externalId, source, btn) {
 }
 
 load();
+</script>
+
+<div id="edit-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:none;align-items:center;justify-content:center;padding:1rem;" onclick="if(event.target===this)closeEditModal()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;padding:1.5rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <h2 style="font-family:'Dela Gothic One',sans-serif;font-size:1.1rem;">Edit Metadata</h2>
+      <button onclick="closeEditModal()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+    </div>
+    <div id="edit-form" style="display:flex;flex-direction:column;gap:.6rem;"></div>
+    <div style="display:flex;gap:.75rem;margin-top:1rem;">
+      <button class="btn btn-primary" onclick="saveEdit()" style="flex:1;">Save</button>
+      <button class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+    </div>
+    <div id="edit-status" style="text-align:center;font-size:.78rem;margin-top:.5rem;height:1.2rem;"></div>
+  </div>
+</div>
+
+<script>
+async function openEditModal() {
+  const res = await fetch(`/api/manga/${MANGA_ID}/nfo`);
+  const nfo = await res.json();
+  const fields = [
+    {key:'title',label:'Title',type:'text'},
+    {key:'author',label:'Author',type:'text'},
+    {key:'artist',label:'Artist',type:'text'},
+    {key:'genre',label:'Genre',type:'text'},
+    {key:'status',label:'Status',type:'select',options:['','Publishing','Completed','On Hiatus','Cancelled']},
+    {key:'publisher',label:'Publisher',type:'text'},
+    {key:'year',label:'Year',type:'number'},
+    {key:'total_chapters',label:'Total Chapters',type:'number'},
+    {key:'cover',label:'Cover URL',type:'text'},
+    {key:'summary',label:'Summary',type:'textarea'}
+  ];
+  document.getElementById('edit-form').innerHTML = fields.map(f => {
+    const val = nfo[f.key] || '';
+    if (f.type === 'select') {
+      return `<div><label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.2rem;">${f.label}</label>
+        <select class="field" data-key="${f.key}">${f.options.map(o=>`<option value="${o}"${o==val?' selected':''}>${o||'—'}</option>`).join('')}</select></div>`;
+    }
+    if (f.type === 'textarea') {
+      return `<div><label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.2rem;">${f.label}</label>
+        <textarea class="field" data-key="${f.key}" rows="3" style="resize:vertical;">${val}</textarea></div>`;
+    }
+    return `<div><label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.2rem;">${f.label}</label>
+      <input class="field" type="${f.type}" data-key="${f.key}" value="${val}"></div>`;
+  }).join('');
+  document.getElementById('edit-overlay').style.display = 'flex';
+}
+
+function closeEditModal() {
+  document.getElementById('edit-overlay').style.display = 'none';
+}
+
+async function saveEdit() {
+  const form = document.getElementById('edit-form');
+  const data = {};
+  form.querySelectorAll('[data-key]').forEach(el => {
+    let v = el.value;
+    const k = el.dataset.key;
+    if (k === 'year' && v) v = parseInt(v);
+    if (k === 'total_chapters' && v) v = parseInt(v);
+    data[k] = v || null;
+  });
+  document.getElementById('edit-status').textContent = 'Saving…';
+  const res = await fetch(`/api/manga/${MANGA_ID}/nfo`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  const result = await res.json();
+  if (result.ok) {
+    document.getElementById('edit-status').style.color = '#7de87d';
+    document.getElementById('edit-status').textContent = '✓ Saved';
+    closeEditModal();
+    setTimeout(load, 800);
+  } else {
+    document.getElementById('edit-status').style.color = 'var(--accent)';
+    document.getElementById('edit-status').textContent = 'Save failed';
+  }
+}
 </script>
 </body>
 </html>

@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,6 +29,76 @@ app = FastAPI(title="MangaShelf")
 MANGA_DIR = Path("/manga")
 DB_PATH = Path("/data/manga.db")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+class LRUCache:
+    def __init__(self, maxsize=128, ttl=60):
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self.data = OrderedDict()
+        self.timestamps = {}
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            if key in self.data:
+                if time.time() - self.timestamps[key] < self.ttl:
+                    self.data.move_to_end(key)
+                    return self.data[key]
+                del self.data[key]
+                del self.timestamps[key]
+            return None
+
+    def put(self, key, value):
+        with self.lock:
+            if key in self.data:
+                self.data.move_to_end(key)
+            elif len(self.data) >= self.maxsize:
+                oldest = next(iter(self.data))
+                del self.data[oldest]
+                del self.timestamps[oldest]
+            self.data[key] = value
+            self.timestamps[key] = time.time()
+
+    def invalidate(self, key):
+        with self.lock:
+            self.data.pop(key, None)
+            self.timestamps.pop(key, None)
+
+_metadata_cache = LRUCache(maxsize=256, ttl=120)
+
+def read_nfo(folder_path: Path) -> dict:
+    nfo = folder_path / "mangashelf.xml"
+    if not nfo.exists():
+        return {}
+    try:
+        tree = ET.parse(str(nfo))
+        root = tree.getroot()
+        return {
+            "title": (root.findtext("Title") or "").strip(),
+            "author": (root.findtext("Author") or "").strip(),
+            "artist": (root.findtext("Artist") or "").strip(),
+            "genre": (root.findtext("Genre") or "").strip(),
+            "summary": (root.findtext("Summary") or "").strip(),
+            "publisher": (root.findtext("Publisher") or "").strip(),
+            "year": int(y) if (y := root.findtext("Year") or "").strip().isdigit() else None,
+            "status": (root.findtext("Status") or "").strip(),
+            "total_chapters": int(c) if (c := root.findtext("TotalChapters") or "").strip().isdigit() else 0,
+            "cover": (root.findtext("Cover") or "").strip(),
+            "source_id": (root.findtext("SourceId") or "").strip(),
+            "source": (root.findtext("Source") or "").strip(),
+        }
+    except:
+        return {}
+
+def write_nfo(folder_path: Path, meta: dict):
+    root = ET.Element("MangaShelf")
+    for tag, val in meta.items():
+        if val is not None and val != "" and val != 0:
+            child = ET.SubElement(root, tag.replace("total_chapters", "TotalChapters").replace("source_id", "SourceId").replace(" ", ""))
+            child.text = str(val)
+    ET.indent(root)
+    nfo = folder_path / "mangashelf.xml"
+    ET.ElementTree(root).write(str(nfo), encoding="utf-8", xml_declaration=True)
 
 templates = Jinja2Templates(directory="/app/frontend/templates")
 app.mount("/static", StaticFiles(directory="/app/frontend/static"), name="static")
@@ -143,16 +214,6 @@ def init_db():
         INSERT OR IGNORE INTO sources VALUES ('mangasee','MangaSee','https://mangasee123.com','mangasee',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','anilist',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','myanimelist',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('comix','Comix','https://comix.com','comix',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangafire','MangaFire','https://mangafire.to','mangafire',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangaball','Mangaball HUB','https://mangaballhub.com','mangaball',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('atsumaru','Atsumaru','https://atsumaru.app','atsumaru',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('weebcentral','Weeb Central','https://weebcentral.com','weebcentral',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangago','Mangago','https://www.mangago.me','mangago',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangadotnet','Mangadotnet','https://manga.dotnet.vn','mangadotnet',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('bookwalker','Bookwalker','https://global.bookwalker.jp','bookwalker',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('rakuten','Rakuten Kobo','https://www.kobo.com','rakuten',0,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('vymanga','VyManga','https://www.vymanga.com','vymanga',0,datetime('now'));
         """)
 
 init_db()
@@ -428,7 +489,11 @@ def scan_manga_dir():
                         if f.suffix.lower() in SUPPORTED_FORMATS:
                             chapters.append(f)
                     if chapters:
-                        meta = extract_metadata(chapters[0])
+                        nfo = read_nfo(item)
+                        if nfo and nfo.get("title"):
+                            meta = nfo
+                        else:
+                            meta = extract_metadata(chapters[0])
                         db.execute(
     """
     INSERT OR IGNORE INTO manga (
@@ -455,24 +520,24 @@ def scan_manga_dir():
     """,
     (
         manga_id,
-        meta.get('series') or item.name,
+        meta.get('title') or meta.get('series') or item.name,
         str(item),
-        None,
-        len(chapters),
+        meta.get('cover'),
+        meta.get('total_chapters') or len(chapters),
         0,
         0,
         'single',
-        None,
-        None,
+        meta.get('source'),
+        meta.get('source_id'),
         datetime.now().isoformat(),
         datetime.now().isoformat(),
-        'local',
-        meta.get('writer'),
-        meta.get('penciller'),
+        meta.get('status') or 'local',
+        meta.get('author') or meta.get('writer'),
+        meta.get('artist') or meta.get('penciller'),
         meta.get('genre'),
         meta.get('summary'),
         meta.get('publisher'),
-        int(meta['year']) if meta.get('year') and meta['year'].isdigit() else None
+        meta.get('year')
     )
 )
                         volumes = {}
@@ -1220,6 +1285,8 @@ async def search_all_sources(q: str):
         if isinstance(result, list):
             merged.extend(result)
     return merged
+
+@app.get("/api/manga-source/{source}/{manga_id}/chapters")
 async def get_source_chapters(source: str, manga_id: str):
     if source == "mangadex":
         async with aiohttp.ClientSession() as session:
@@ -1273,7 +1340,7 @@ async def get_source_chapters(source: str, manga_id: str):
     return []
 
 @app.get("/api/manga/{manga_id}/metadata")
-async def get_external_metadata(manga_id: str, source: str = "anilist", external_id: str = ""):
+async def get_external_metadata(manga_id: str, source: str = "anilist", external_id: str = "", cover: str = ""):
     db = get_db()
     manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
     if not manga:
@@ -1310,8 +1377,9 @@ async def get_external_metadata(manga_id: str, source: str = "anilist", external
         if m:
             title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or ""
             authors = [e["node"]["name"]["full"] for e in m.get("staff", {}).get("edges", []) if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
+            ext_cover = cover or m.get("coverImage", {}).get("large") or m.get("coverImage", {}).get("medium")
             db.execute(
-                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, chapters=?, year=?, updated_at=? WHERE id=?",
+                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, year=?, cover=?, updated_at=? WHERE id=?",
                 (
                     title,
                     authors[0] if authors else manga["author"],
@@ -1321,11 +1389,28 @@ async def get_external_metadata(manga_id: str, source: str = "anilist", external
                     m.get("status", "").upper() if m.get("status") else manga["status"],
                     m.get("chapters") or manga["total_chapters"],
                     m.get("startDate", {}).get("year") or manga["year"],
+                    ext_cover,
                     datetime.now().isoformat(),
                     manga_id
                 )
             )
             db.commit()
+            manga_path = Path(manga["path"])
+            if manga_path.is_dir():
+                write_nfo(manga_path, {
+                    "Title": title,
+                    "Author": authors[0] if authors else manga["author"],
+                    "Artist": authors[1] if len(authors) > 1 else manga["artist"],
+                    "Genre": ", ".join(m.get("genres", [])),
+                    "Summary": (m.get("description") or "")[:2000] if m.get("description") else manga["summary"],
+                    "Status": m.get("status", "").upper() if m.get("status") else manga["status"],
+                    "TotalChapters": m.get("chapters") or manga["total_chapters"],
+                    "Year": m.get("startDate", {}).get("year") or manga["year"],
+                    "Cover": ext_cover,
+                    "Source": "anilist",
+                    "SourceId": external_id
+                })
+                _metadata_cache.invalidate(manga_id)
         db.close()
         return {"ok": True, "data": m} if m else {"ok": False, "error": "Not found"}
 
@@ -1338,8 +1423,9 @@ async def get_external_metadata(manga_id: str, source: str = "anilist", external
         if m:
             authors = [a["name"] for a in m.get("authors", [])]
             genres = [g["name"] for g in m.get("genres", [])]
+            ext_cover = cover or m.get("images", {}).get("jpg", {}).get("large_image_url") or m.get("images", {}).get("jpg", {}).get("image_url")
             db.execute(
-                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, chapters=?, volumes=?, year=?, publisher=?, updated_at=? WHERE id=?",
+                "UPDATE manga SET title=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, year=?, publisher=?, cover=?, updated_at=? WHERE id=?",
                 (
                     m.get("title") or m.get("title_english") or manga["title"],
                     authors[0] if authors else manga["author"],
@@ -1348,19 +1434,113 @@ async def get_external_metadata(manga_id: str, source: str = "anilist", external
                     (m.get("synopsis") or "")[:2000] if m.get("synopsis") else manga["summary"],
                     m.get("status", "").upper() if m.get("status") else manga["status"],
                     m.get("chapters") or manga["total_chapters"],
-                    m.get("volumes") or None,
                     m.get("published", {}).get("prop", {}).get("from", {}).get("year") or manga["year"],
                     (m.get("serialization", [{}])[0].get("name") if m.get("serialization") else manga["publisher"]),
+                    ext_cover,
                     datetime.now().isoformat(),
                     manga_id
                 )
             )
             db.commit()
+            manga_path = Path(manga["path"])
+            if manga_path.is_dir():
+                write_nfo(manga_path, {
+                    "Title": m.get("title") or m.get("title_english") or manga["title"],
+                    "Author": authors[0] if authors else manga["author"],
+                    "Artist": authors[1] if len(authors) > 1 else manga["artist"],
+                    "Genre": ", ".join(genres),
+                    "Summary": (m.get("synopsis") or "")[:2000] if m.get("synopsis") else manga["summary"],
+                    "Status": m.get("status", "").upper() if m.get("status") else manga["status"],
+                    "TotalChapters": m.get("chapters") or manga["total_chapters"],
+                    "Year": m.get("published", {}).get("prop", {}).get("from", {}).get("year") or manga["year"],
+                    "Publisher": (m.get("serialization", [{}])[0].get("name") if m.get("serialization") else manga["publisher"]),
+                    "Cover": ext_cover,
+                    "Source": "myanimelist",
+                    "SourceId": external_id
+                })
+                _metadata_cache.invalidate(manga_id)
         db.close()
         return {"ok": True, "data": m} if m else {"ok": False, "error": "Not found"}
 
     db.close()
     raise HTTPException(400, "Invalid source or missing external_id")
+
+@app.get("/api/manga/{manga_id}/nfo")
+async def get_nfo(manga_id: str):
+    cached = _metadata_cache.get(manga_id)
+    if cached:
+        return cached
+    db = get_db()
+    manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+    db.close()
+    if not manga:
+        raise HTTPException(404, "Manga not found")
+    manga_path = Path(manga["path"])
+    nfo = {}
+    if manga_path.is_dir():
+        nfo = read_nfo(manga_path)
+    if not nfo:
+        nfo = {
+            "title": manga["title"],
+            "author": manga["author"],
+            "artist": manga["artist"],
+            "genre": manga["genre"],
+            "summary": manga["summary"],
+            "publisher": manga["publisher"],
+            "year": manga["year"],
+            "status": manga["status"],
+            "total_chapters": manga["total_chapters"],
+            "cover": manga["cover"],
+            "source": manga["source"],
+            "source_id": manga["source_id"]
+        }
+    _metadata_cache.put(manga_id, nfo)
+    return nfo
+
+class NfoUpdate(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    artist: Optional[str] = None
+    genre: Optional[str] = None
+    summary: Optional[str] = None
+    publisher: Optional[str] = None
+    year: Optional[int] = None
+    status: Optional[str] = None
+    total_chapters: Optional[int] = None
+    cover: Optional[str] = None
+
+@app.put("/api/manga/{manga_id}/nfo")
+async def update_nfo(manga_id: str, data: NfoUpdate):
+    db = get_db()
+    manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+    if not manga:
+        db.close()
+        raise HTTPException(404, "Manga not found")
+
+    updates = {}
+    for field in ["title","author","artist","genre","summary","publisher","year","status","total_chapters","cover"]:
+        val = getattr(data, field)
+        if val is not None:
+            updates[field] = val
+    if updates:
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        vals = list(updates.values()) + [datetime.now().isoformat(), manga_id]
+        db.execute(f"UPDATE manga SET {set_clause}, updated_at=? WHERE id=?", vals)
+        db.commit()
+    db.close()
+    manga_path = Path(manga["path"])
+    if manga_path.is_dir():
+        nfo = {}
+        for k, v in updates.items():
+            tag = "".join(w.capitalize() if w != "total_chapters" else "TotalChapters" for w in k.split("_"))
+            if tag == "TotalChapters":
+                tag = "TotalChapters"
+            nfo[tag] = v
+        existing = read_nfo(manga_path)
+        existing.update(nfo)
+        write_nfo(manga_path, existing)
+    _metadata_cache.invalidate(manga_id)
+    return {"ok": True}
 
 @app.get("/api/manga/{manga_id}/find-metadata")
 async def find_external_metadata(manga_id: str, source: str = "anilist"):

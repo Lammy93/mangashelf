@@ -213,6 +213,7 @@
       </div>
     </div>
     <div id="metadata-section" style="display:none;padding:1rem;overflow-y:auto;max-height:400px;">
+      <a id="meta-source-link" href="#" target="_blank" rel="noopener" class="btn btn-ghost" style="width:100%;margin-bottom:1rem;text-align:center;text-decoration:none;">View on source →</a>
       <div id="metadata-body"></div>
     </div>
   </div>
@@ -382,6 +383,8 @@ async function openManga(idx, sourceGroup) {
     document.getElementById('chapter-section').style.display = 'none';
     document.getElementById('metadata-section').style.display = '';
     document.getElementById('modal-overlay').classList.add('open');
+    const sourceUrls = {anilist:'https://anilist.co/manga/', myanimelist:'https://myanimelist.net/manga/'};
+    document.getElementById('meta-source-link').href = `${sourceUrls[currentResult.source]||''}${currentResult.id}`;
     const res = await fetch(`/api/manga-source/${currentResult.source}/${currentResult.id}/chapters`);
     const info = await res.json();
     if (info.length && info[0].metadata) {

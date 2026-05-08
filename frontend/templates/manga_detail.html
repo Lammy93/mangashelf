@@ -124,11 +124,11 @@
   </div>
 </div>
 
-<div id="edit-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:1rem;">
+<div id="edit-overlay" class="modal-overlay" style="display:none;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border);">
       <h3 style="font-family:'Dela Gothic One',sans-serif;font-size:1rem;">Edit Details</h3>
-      <button onclick="closeEditModal()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+      <button class="modal-close" onclick="closeEditModal()">✕</button>
     </div>
     <div class="match-section">
       <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.4rem;font-weight:600;">Find Match from Online Sources</label>
@@ -197,6 +197,7 @@ function renderHero() {
         ${m.summary ? `<div class="hero-desc">${m.summary}</div>` : ''}
         <div class="hero-actions">
           <button class="btn btn-primary" onclick="readFirst()">▶ Read First</button>
+          <button class="btn btn-ghost" id="detail-fav-btn" onclick="toggleDetailFav()">♡ Favorite</button>
           <button class="btn btn-ghost" onclick="openEditModal()">✎ Edit</button>
         </div>
       </div>
@@ -335,12 +336,12 @@ async function saveEdit() {
   const res = await fetch(`/api/manga/${MANGA_ID}/nfo`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
   const result = await res.json();
   if (result.ok) {
-    document.getElementById('edit-status').style.color = '#7de87d';
+    document.getElementById('edit-status').className = 'text-success';
     document.getElementById('edit-status').textContent = '✓ Saved';
     closeEditModal();
     setTimeout(load, 800);
   } else {
-    document.getElementById('edit-status').style.color = 'var(--accent)';
+    document.getElementById('edit-status').className = 'text-error';
     document.getElementById('edit-status').textContent = 'Save failed';
   }
 }
@@ -410,6 +411,30 @@ async function applyMatch(source, externalId, cover, title, btn) {
   }
 }
 
+let _isFavorited = false;
+
+async function loadFavStatus() {
+  try {
+    const res = await fetch(`/api/manga/${MANGA_ID}/is-favorite`);
+    const data = await res.json();
+    _isFavorited = data.favorited;
+    updateFavBtn();
+  } catch (e) {}
+}
+
+function updateFavBtn() {
+  const btn = document.getElementById('detail-fav-btn');
+  if (!btn) return;
+  btn.textContent = _isFavorited ? '❤️ Favorited' : '♡ Favorite';
+}
+
+async function toggleDetailFav() {
+  await fetch(`/api/manga/${MANGA_ID}/favorite`, {method:'POST'});
+  _isFavorited = !_isFavorited;
+  updateFavBtn();
+}
+
+loadFavStatus();
 load();
 </script>
 </body>

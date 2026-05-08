@@ -121,6 +121,7 @@ def init_db():
         INSERT OR IGNORE INTO sources VALUES ('asurascans','Asura Scans','https://www.asurascans.com','asurascans',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('comick','ComicK','https://comick.io','comick',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('flamescans','Flame Scans','https://flamescans.org','flamescans',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('mangal','mangal','','mangal',1,datetime('now'));
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,

@@ -916,3 +916,38 @@ async def download_flamescans_chapter(chapter_id: str, manga_title: str, chapter
         await _download_image_list(img_urls, manga_title, chapter_num, job_id)
     except Exception as e:
         download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+# ── Job Queue Dispatcher ──────────────────────────────────────────────
+
+def _run_download_job(job: dict):
+    source = job["source"]
+    if source.startswith("mangal_"):
+        mangal_src = source.split("mangal_", 1)[1]
+        from .mangal_source import download_mangal_chapter as dl
+        import asyncio
+        asyncio.run(dl(
+            job["manga_title"], job["chapter_number"],
+            mangal_src, job["manga_title"], job["chapter_id"], job["id"]
+        ))
+    else:
+        import asyncio
+        tasks_map = {
+            "mangadex": download_mangadex_chapter,
+            "mangasee": download_mangasee_chapter,
+            "batoto": download_batoto_chapter,
+            "asurascans": download_asurascans_chapter,
+            "comick": download_comick_chapter,
+            "flamescans": download_flamescans_chapter,
+        }
+        fn = tasks_map.get(source)
+        if fn:
+            asyncio.run(fn(job["chapter_id"], job["manga_title"], job["chapter_number"], job["id"]))
+
+async def search_mangal_all(q: str, limit: int = 5) -> list:
+    try:
+        from .mangal_source import mangal_available, search_mangal
+        if not mangal_available():
+            return []
+        return await search_mangal(q, limit=limit)
+    except Exception:
+        return []

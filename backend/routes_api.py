@@ -12,7 +12,7 @@ import fitz
 import zipfile
 import rarfile
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from .config import CACHE_DIR, SUPPORTED_FORMATS, SUPPORTED_IMAGE_EXTS
@@ -32,12 +32,14 @@ from .services import (
     scan_manga_dir, extract_pages, extract_chapter_bg, start_folder_watcher,
     download_mangadex_chapter, download_mangasee_chapter, download_batoto_chapter,
     download_asurascans_chapter, download_comick_chapter, download_flamescans_chapter,
-    download_status, search_mangadex, search_anilist, search_myanimelist,
+    search_mangadex, search_anilist, search_myanimelist,
     search_mangasee, search_batoto, search_asurascans, search_comick, search_flamescans,
     get_mangasee_chapters, get_batoto_chapters, get_asurascans_chapters,
     get_comick_chapters, get_flamescans_chapters,
-    auto_fetch_metadata, extract_metadata, pre_extract_pages
+    auto_fetch_metadata, extract_metadata, pre_extract_pages,
+    _run_download_job, search_mangal_all
 )
+from .job_queue import create_job, get_job, list_jobs, cancel_job, start_worker
 
 router = APIRouter()
 
@@ -727,12 +729,14 @@ async def search_all_sources(q: str):
                 return await search_comick(q, limit=5)
             if source_type == "flamescans":
                 return await search_flamescans(q, limit=5)
+            if source_type == "mangal":
+                return await search_mangal_all(q, limit=5)
             return []
         except Exception as e:
             logger.debug(f"[search-all] Source search failed: {e}")
             return []
     db = get_db()
-    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','mangasee','batoto','asurascans','comick','flamescans','anilist','myanimelist')").fetchall()
+    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','mangasee','batoto','asurascans','comick','flamescans','mangal','anilist','myanimelist')").fetchall()
     db.close()
     tasks = [search_source(r["id"], r["type"]) for r in rows]
     all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -819,6 +823,10 @@ async def get_source_chapters(source: str, manga_id: str):
         return await get_comick_chapters(manga_id)
     if source == "flamescans":
         return await get_flamescans_chapters(manga_id)
+    if source.startswith("mangal_"):
+        from .mangal_source import get_mangal_chapters
+        mangal_src = source.split("mangal_", 1)[1]
+        return await get_mangal_chapters(mangal_src, manga_id)
     return []
 
 # ── Metadata ────────────────────────────────────────────────────────────
@@ -1128,27 +1136,18 @@ async def find_external_metadata(manga_id: str, source: str = "anilist"):
 # ── Downloads ───────────────────────────────────────────────────────────
 
 @router.post("/api/download")
-async def download_chapter(data: DownloadRequest, background_tasks: BackgroundTasks):
-    job_id = str(uuid.uuid4())
-    tasks_map = {
-        "mangadex": download_mangadex_chapter,
-        "mangasee": download_mangasee_chapter,
-        "batoto": download_batoto_chapter,
-        "asurascans": download_asurascans_chapter,
-        "comick": download_comick_chapter,
-        "flamescans": download_flamescans_chapter,
-    }
-    task = tasks_map.get(data.source)
-    if task:
-        background_tasks.add_task(task, data.chapter_id, data.manga_title, data.chapter_num, job_id)
+async def download_chapter(data: DownloadRequest):
+    job_id = create_job(data.source, data.manga_title, data.chapter_num, data.chapter_id)
     return {"job_id": job_id}
 
 @router.get("/api/download/{job_id}")
 async def download_progress(job_id: str):
-    return download_status.get(job_id, {"status": "unknown"})
+    return get_job(job_id)
 
 @router.post("/api/download-all")
-async def download_all_chapters(data: DownloadRequest, background_tasks: BackgroundTasks):
+async def download_all_chapters(data: DownloadRequest):
+    if data.source.startswith("mangal_"):
+        return {"job_ids": [], "total": 0, "error": "Download-all not supported for mangal sources"}
     async with aiohttp.ClientSession() as session:
         url = f"https://api.mangadex.org/manga/{data.chapter_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
         async with session.get(url) as resp:
@@ -1162,10 +1161,20 @@ async def download_all_chapters(data: DownloadRequest, background_tasks: Backgro
         ch_num = ch["attributes"].get("chapter")
         if not ch_num:
             continue
-        job_id = str(uuid.uuid4())
-        background_tasks.add_task(download_mangadex_chapter, ch_id, data.manga_title, ch_num, job_id)
+        job_id = create_job("mangadex", data.manga_title, str(ch_num), ch_id)
         job_ids.append(job_id)
     return {"job_ids": job_ids, "total": len(job_ids)}
+
+# ── Jobs ──────────────────────────────────────────────────────────────
+
+@router.get("/api/jobs")
+async def get_jobs(limit: int = 50):
+    return list_jobs(limit)
+
+@router.post("/api/jobs/{job_id}/cancel")
+async def cancel_job_route(job_id: str):
+    cancel_job(job_id)
+    return {"ok": True}
 
 # ── Cache ───────────────────────────────────────────────────────────────
 

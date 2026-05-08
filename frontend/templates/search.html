@@ -96,7 +96,7 @@ async function doSearch() {
     const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
     const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
     const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-    const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source);
+    const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
     const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
     return `
     <div class="result-card" onclick="openManga(${i},'${srcType}')">
@@ -146,7 +146,7 @@ async function searchAll() {
         const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
         const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
         const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source);
+        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
         const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
         return `
         <div class="result-card" onclick="openManga(${i},'${src}')">

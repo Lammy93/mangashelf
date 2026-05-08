@@ -11,6 +11,7 @@ from .db import init_db, migrate_db, init_default_directory
 from .routes_pages import router as pages_router
 from .routes_api import router as api_router
 from .services import start_folder_watcher, start_interval_scanner, start_followed_updates_checker
+from .job_queue import start_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,5 +41,6 @@ app.include_router(api_router)
 start_folder_watcher()
 start_interval_scanner()
 start_followed_updates_checker()
+start_worker()
 
 logger.info("MangaShelf started")

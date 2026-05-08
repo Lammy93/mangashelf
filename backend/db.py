@@ -148,6 +148,12 @@ def init_db():
             added_at TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
+        CREATE TABLE IF NOT EXISTS file_scan_tracking (
+            file_path TEXT PRIMARY KEY,
+            last_modified REAL NOT NULL,
+            file_size INTEGER NOT NULL,
+            last_scanned TEXT
+        );
         """)
 
 def slugify(text: str) -> str:

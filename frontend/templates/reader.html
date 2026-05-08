@@ -108,6 +108,7 @@
   <button class="toolbar-btn active" id="btn-single" onclick="setMode('single')">▭ Single</button>
   <button class="toolbar-btn" id="btn-double" onclick="setMode('double')">▭▭ Double</button>
   <button class="toolbar-btn" id="btn-strip" onclick="setMode('strip')">☰ Strip</button>
+  <button class="toolbar-btn active" id="btn-continuous" onclick="toggleContinuous()" title="Auto-advance to next chapter">▶ Auto</button>
   <button class="toolbar-btn" onclick="toggleToolbar()" title="Hide toolbar">⊙</button>
 </div>
 
@@ -130,6 +131,7 @@ let allChapters = [];
 let toolbarVisible = true;
 let saveTimer = null;
 let _preloadCache = {};
+let continuousEnabled = true;
 
 function preloadPages(startIdx, count = 4) {
   for (let i = startIdx; i < startIdx + count && i < pages.length; i++) {
@@ -159,7 +161,7 @@ async function init() {
   await loadChapter(currentChapterId);
 }
 
-async function loadChapter(chapterId) {
+async function loadChapter(chapterId, goToLastPage = false) {
   document.getElementById('loading').classList.remove('hidden');
   currentChapterId = chapterId;
   _preloadCache = {};
@@ -169,7 +171,19 @@ async function loadChapter(chapterId) {
   currentPage = 0;
   renderPages();
   document.getElementById('loading').classList.add('hidden');
-  preloadPages(1, 4);
+  if (goToLastPage && pages.length > 0) {
+    if (currentMode === 'strip') {
+      currentPage = pages.length - 1;
+    } else if (currentMode === 'double') {
+      currentPage = Math.floor((pages.length - 1) / 2) * 2;
+    } else {
+      currentPage = pages.length - 1;
+    }
+    renderPages();
+    updatePageInfo(); updateProgress();
+  }
+  preloadPages(currentPage + 1, 4);
+  preloadNextChapter();
 }
 
 function renderPages() {
@@ -219,14 +233,14 @@ function nextPage() {
       spreads[cur].classList.remove('active');
       spreads[cur+1].classList.add('active');
       currentPage = parseInt(spreads[cur+1].dataset.spread);
-    } else { nextChapter(); return; }
+    } else if (continuousEnabled) { nextChapter(); return; }
   } else {
     const imgs = document.querySelectorAll('.page-img');
     if (currentPage < pages.length - 1) {
       imgs[currentPage].classList.remove('active');
       currentPage++;
       imgs[currentPage].classList.add('active');
-    } else { nextChapter(); return; }
+    } else if (continuousEnabled) { nextChapter(); return; }
   }
   updatePageInfo(); updateProgress(); scheduleSave();
   preloadPages(currentPage + 1, 4);
@@ -242,14 +256,14 @@ function prevPage() {
       spreads[cur].classList.remove('active');
       spreads[cur-1].classList.add('active');
       currentPage = parseInt(spreads[cur-1].dataset.spread);
-    }
+    } else { prevChapter(); return; }
   } else {
     const imgs = document.querySelectorAll('.page-img');
     if (currentPage > 0) {
       imgs[currentPage].classList.remove('active');
       currentPage--;
       imgs[currentPage].classList.add('active');
-    }
+    } else { prevChapter(); return; }
   }
   updatePageInfo(); updateProgress(); scheduleSave();
 }
@@ -261,6 +275,35 @@ function nextChapter() {
     document.getElementById('chapter-select').value = next.id;
     loadChapter(next.id);
   }
+}
+
+function prevChapter() {
+  const idx = allChapters.findIndex(c => c.id === currentChapterId);
+  if (idx > 0) {
+    const prev = allChapters[idx - 1];
+    document.getElementById('chapter-select').value = prev.id;
+    loadChapter(prev.id, true);
+  }
+}
+
+function preloadNextChapter() {
+  const idx = allChapters.findIndex(c => c.id === currentChapterId);
+  if (idx < allChapters.length - 1) {
+    const next = allChapters[idx + 1];
+    fetch(`/api/chapter/${next.id}/pages`).then(r => r.json()).then(data => {
+      if (data.pages && data.pages.length > 0) {
+        for (let i = 0; i < Math.min(2, data.pages.length); i++) {
+          const img = new Image();
+          img.src = data.pages[i];
+        }
+      }
+    });
+  }
+}
+
+function toggleContinuous() {
+  continuousEnabled = !continuousEnabled;
+  document.getElementById('btn-continuous').classList.toggle('active', continuousEnabled);
 }
 
 function handleReaderClick(e) {
@@ -316,6 +359,9 @@ function toggleToolbar() {
 document.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown') nextPage();
   if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') prevPage();
+  if (e.key === ']') nextChapter();
+  if (e.key === '[') prevChapter();
+  if (e.key === 'c' || e.key === 'C') toggleContinuous();
   if (e.key === 'h' || e.key === 'H') toggleToolbar();
 });
 

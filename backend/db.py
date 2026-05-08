@@ -113,15 +113,9 @@ def init_db():
             error TEXT
         );
         INSERT OR IGNORE INTO sources VALUES ('mangadex','MangaDex','https://api.mangadex.org','mangadex',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangasee','MangaSee','https://mangasee123.com','mangasee',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('mangakakalot','MangaKakalot','https://mangakakalot.com','mangakakalot',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangafox','MangaFox','https://fanfox.net','mangafox',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','metadata',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','metadata',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('batoto','Batoto','https://battwo.com','batoto',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('asurascans','Asura Scans','https://www.asurascans.com','asurascans',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('comick','ComicK','https://comick.io','comick',1,datetime('now'));
-        INSERT OR IGNORE INTO sources VALUES ('flamescans','Flame Scans','https://flamescans.org','flamescans',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangal','mangal','','mangal',1,datetime('now'));
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -190,6 +184,19 @@ def migrate_db():
     add_col("chapters", "slug", "TEXT", "NULL")
     add_col("manga", "slug", "TEXT", "NULL")
     add_col("manga", "auto_download", "INTEGER", "0")
+    # output_format column for download_jobs
+    cols = [row["name"] for row in db.execute("PRAGMA table_info(download_jobs)") if row["name"] != "output_format"]
+    if "output_format" not in cols:
+        try:
+            db.execute("ALTER TABLE download_jobs ADD COLUMN output_format TEXT DEFAULT 'cbz'")
+        except Exception:
+            pass
+    # Disable dead sources for existing installs
+    dead = ('mangasee','mangakakalot','batoto','asurascans','comick','flamescans')
+    for src in dead:
+        db.execute("UPDATE sources SET enabled=0 WHERE id=?", (src,))
+    # Ensure mangafox is enabled
+    db.execute("UPDATE sources SET enabled=1 WHERE id='mangafox'")
     for row in db.execute("SELECT id, title FROM manga WHERE slug IS NULL AND title IS NOT NULL"):
         db.execute("UPDATE manga SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
     for row in db.execute("SELECT id, title FROM chapters WHERE slug IS NULL AND title IS NOT NULL"):

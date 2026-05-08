@@ -26,6 +26,12 @@
       <select class="search-input" id="source-sel"></select>
       <button class="btn btn-primary" onclick="doSearch()">Search</button>
       <button class="btn btn-ghost" id="search-all-btn" onclick="searchAll()">Search All</button>
+      <select class="search-input" id="format-sel" style="max-width:90px;font-size:.75rem;">
+        <option value="cbz">CBZ</option>
+        <option value="pdf">PDF</option>
+        <option value="epub">EPUB</option>
+        <option value="cbr">CBR</option>
+      </select>
     </div>
     <div id="results-wrap">
       <div class="empty-search"><h3>Search for manga above</h3><p>Browse MangaDex and your configured sources.</p></div>
@@ -96,7 +102,7 @@ async function doSearch() {
     const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
     const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
     const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(m.source) || m.source.startsWith('mangal_');
+        const isDownloadSource = ['mangadex','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
     const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
     return `
     <div class="result-card" onclick="openManga(${i},'${srcType}')">
@@ -134,11 +140,9 @@ async function searchAll() {
     grouped[src].push(m);
   });
 
-  const sourceNames = {
-    mangadex:'MangaDex', mangasee:'MangaSee', mangakakalot:'MangaKakalot',
-    mangafox:'MangaFox', anilist:'AniList', myanimelist:'MyAnimeList',
-    batoto:'Batoto', asurascans:'Asura Scans', comick:'ComicK',
-    flamescans:'Flame Scans', mangal:'mangal'
+        const sourceNames = {
+    mangadex:'MangaDex', mangafox:'MangaFox', anilist:'AniList',
+    myanimelist:'MyAnimeList', mangal:'mangal'
   };
   let html = '';
   for (const [src, items] of Object.entries(grouped)) {
@@ -152,7 +156,7 @@ async function searchAll() {
         const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
         const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
         const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(m.source) || m.source.startsWith('mangal_');
+        const isDownloadSource = ['mangadex','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
         const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
         return `
         <div class="result-card" onclick="openManga(${i},'${src}')">
@@ -185,7 +189,7 @@ async function openManga(idx, sourceGroup) {
     : '';
   document.getElementById('modal-img').src = coverUrl;
   document.getElementById('modal-status').textContent = currentResult.status || '';
-  const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(currentResult.source);
+  const isDownloadSource = ['mangadex','mangafox'].includes(currentResult.source);
   document.getElementById('dl-all-btn').style.display = isDownloadSource ? '' : 'none';
 
   if (isDownloadSource) {
@@ -249,9 +253,10 @@ async function openManga(idx, sourceGroup) {
 async function downloadChapter(chId, chNum) {
   const btn = document.querySelector(`#ch-${chId} .dl-btn`);
   btn.textContent = '…'; btn.className = 'dl-btn loading';
+  const fmt = document.getElementById('format-sel')?.value || 'cbz';
   const res = await fetch('/api/download', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({chapter_id:chId, manga_title:currentResult.title, chapter_num:chNum, source:currentResult.source})
+    body: JSON.stringify({chapter_id:chId, manga_title:currentResult.title, chapter_num:chNum, source:currentResult.source, output_format:fmt})
   });
   const {job_id} = await res.json();
   pollDownload(job_id, btn);
@@ -260,9 +265,10 @@ async function downloadChapter(chId, chNum) {
 async function downloadAll() {
   const btn = document.getElementById('dl-all-btn');
   btn.disabled = true; btn.textContent = '⏳ Queuing…';
+  const fmt = document.getElementById('format-sel')?.value || 'cbz';
   const res = await fetch('/api/download-all', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({chapter_id: currentResult.id, manga_title: currentResult.title, chapter_num: '', source: currentResult.source})
+    body: JSON.stringify({chapter_id: currentResult.id, manga_title: currentResult.title, chapter_num: '', source: currentResult.source, output_format:fmt})
   });
   const data = await res.json();
   btn.textContent = `↓ Queued ${data.total} chapters`;

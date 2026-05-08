@@ -50,3 +50,4 @@ class DownloadRequest(BaseModel):
     manga_title: str
     chapter_num: str
     source: str
+    output_format: str = "cbz"

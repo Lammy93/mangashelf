@@ -73,7 +73,7 @@ async function loadQueue() {
       wrap.innerHTML = '<div class="dl-empty"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg><p>No downloads yet</p><p style="font-size:.8rem;margin-top:.3rem;">Use the Discover page to find and download manga chapters.</p></div>';
       return;
     }
-    let html = `<table class="dl-table"><thead><tr><th>Manga</th><th>Chapter</th><th>Source</th><th>Status</th><th>Progress</th><th></th></tr></thead><tbody>`;
+    let html = `<table class="dl-table"><thead><tr><th>Manga</th><th>Chapter</th><th>Source</th><th>Format</th><th>Status</th><th>Progress</th><th></th></tr></thead><tbody>`;
     for (const j of jobs) {
       const statusClass = `status-${j.status}`;
       const progress = j.progress || 0;
@@ -82,10 +82,12 @@ async function loadQueue() {
       const canCancel = j.status === 'queued' || j.status === 'running';
       const canRetry = j.status === 'failed' || j.status === 'cancelled';
       const isRunning = j.status === 'running';
+      const fmt = j.output_format || 'cbz';
       html += `<tr>
         <td><div class="dl-title" title="${escHtml(j.manga_title || '')}">${escHtml(j.manga_title || '')}</div></td>
         <td>${escHtml(j.chapter_number || '?')}</td>
         <td style="color:var(--muted);font-size:.8rem;">${escHtml(j.source || '')}</td>
+        <td><span class="status-badge" style="background:rgba(255,255,255,.06);text-transform:uppercase;font-size:.65rem;">${fmt}</span></td>
         <td><span class="status-badge ${statusClass}">${isRunning ? '<span class="spinner-inline"></span>' : ''} ${statusLabel}</span></td>
         <td>
           <div class="progress-wrap"><div class="progress-fill" style="width:${progress}%"></div></div>

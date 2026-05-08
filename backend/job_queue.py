@@ -27,6 +27,7 @@ def ensure_tables():
             progress INTEGER DEFAULT 0,
             error TEXT,
             priority INTEGER DEFAULT 0,
+            output_format TEXT DEFAULT 'cbz',
             created_at TEXT NOT NULL,
             started_at TEXT,
             completed_at TEXT
@@ -37,12 +38,12 @@ def ensure_tables():
 
 ensure_tables()
 
-def create_job(source: str, manga_title: str, chapter_number: str, chapter_id: str) -> str:
+def create_job(source: str, manga_title: str, chapter_number: str, chapter_id: str, output_format: str = "cbz") -> str:
     job_id = str(uuid.uuid4())
     db = get_db()
     db.execute(
-        "INSERT INTO download_jobs (id, source, manga_title, chapter_number, chapter_id, status, created_at) VALUES (?,?,?,?,?,?,?)",
-        (job_id, source, manga_title, chapter_number, chapter_id, 'queued', datetime.now().isoformat())
+        "INSERT INTO download_jobs (id, source, manga_title, chapter_number, chapter_id, output_format, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (job_id, source, manga_title, chapter_number, chapter_id, output_format, 'queued', datetime.now().isoformat())
     )
     db.commit()
     db.close()

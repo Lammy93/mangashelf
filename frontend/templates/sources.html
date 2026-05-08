@@ -59,13 +59,7 @@ async function loadSources() {
   list.innerHTML = filtered.map(s => {
     let icon = '🔗';
     if (s.id === 'mangadex') icon = '🌐';
-    else if (s.id === 'mangasee') icon = '📚';
-    else if (s.id === 'mangakakalot') icon = '📖';
     else if (s.id === 'mangafox') icon = '🦊';
-    else if (s.id === 'batoto') icon = '📘';
-    else if (s.id === 'asurascans') icon = '⚔️';
-    else if (s.id === 'comick') icon = '💬';
-    else if (s.id === 'flamescans') icon = '🔥';
     return `<div class="source-row" id="src-${s.id}">
       <div class="source-icon">${icon}</div>
       <div class="source-info">

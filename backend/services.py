@@ -1167,23 +1167,28 @@ async def download_flamescans_chapter(chapter_id: str, manga_title: str, chapter
 
 def _run_download_job(job: dict):
     source = job["source"]
+    output_format = job.get("output_format", "cbz") or "cbz"
     if source.startswith("mangal_"):
         mangal_src = source.split("mangal_", 1)[1]
+        manga_id = job.get("manga_id") or job.get("chapter_id", "")
         from .mangal_source import download_mangal_chapter as dl
         import asyncio
         asyncio.run(dl(
             job["manga_title"], job["chapter_number"],
-            mangal_src, job["manga_title"], job["chapter_id"], job["id"]
+            mangal_src, manga_id, job["chapter_id"], job["id"]
         ))
     else:
         import asyncio
+        from .connectors import get_connector
+        conn = get_connector(source)
+        if conn:
+            asyncio.run(conn.download_chapter(
+                job["chapter_id"], job["manga_title"],
+                job["chapter_number"], job["id"], output_format
+            ))
+            return
         tasks_map = {
             "mangadex": download_mangadex_chapter,
-            "mangasee": download_mangasee_chapter,
-            "batoto": download_batoto_chapter,
-            "asurascans": download_asurascans_chapter,
-            "comick": download_comick_chapter,
-            "flamescans": download_flamescans_chapter,
         }
         fn = tasks_map.get(source)
         if fn:

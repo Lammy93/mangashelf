@@ -665,88 +665,34 @@ async def toggle_source(source_id: str):
 
 @router.get("/api/search")
 async def search_manga(q: str, source: str = "mangadex"):
-    if source == "mangadex":
-        return await search_mangadex(q)
+    from .connectors import get_connector
+    conn = get_connector(source)
+    if conn:
+        return await conn.search(q)
     if source == "anilist":
         return await search_anilist(q)
     if source == "myanimelist":
         return await search_myanimelist(q)
-    if source == "mangakakalot":
-        async with aiohttp.ClientSession() as session:
-            url = f"https://mangakakalot.com/search/story/{q.replace(' ', '_')}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for item in soup.select("div.daily-update-storie-item")[:20]:
-            link = item.select_one("h3 a")
-            img = item.select_one("img")
-            if link and img:
-                title = link.get("title", "") or link.text.strip()
-                href = link.get("href", "")
-                cover = img.get("src", "")
-                if not cover.startswith("http"):
-                    cover = f"https://mangakakalot.com{cover}"
-                results.append({"id": href, "title": title, "cover": cover, "status": None, "source": "mangakakalot", "description": ""})
-        return results
-    if source == "mangafox":
-        async with aiohttp.ClientSession() as session:
-            url = f"https://fanfox.net/search?title={q}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for item in soup.select(".search-result-item")[:20]:
-            link = item.select_one("a")
-            img = item.select_one("img")
-            if link:
-                title = link.get("title", "") or link.text.strip()
-                href = link.get("href", "")
-                cover = img.get("src", "") if img else ""
-                if cover and not cover.startswith("http"):
-                    cover = f"https://fanfox.net{cover}"
-                results.append({"id": href, "title": title, "cover": cover, "status": None, "source": "mangafox", "description": ""})
-        return results
-    if source == "mangasee":
-        return await search_mangasee(q)
-    if source == "batoto":
-        return await search_batoto(q)
-    if source == "asurascans":
-        return await search_asurascans(q)
-    if source == "comick":
-        return await search_comick(q)
-    if source == "flamescans":
-        return await search_flamescans(q)
     if source == "mangal":
         return await search_mangal_all(q)
     if source.startswith("mangal_"):
-        src_name = source.split("mangal_", 1)[1]
         from .mangal_source import search_mangal as _mangal_search
         return await _mangal_search(q)
     return []
 
 @router.get("/api/search-all")
 async def search_all_sources(q: str):
+    from .connectors import get_all_connectors, get_connector
+
     async def search_source(source_id, source_type):
         try:
-            if source_type == "mangadex":
-                return await search_mangadex(q, limit=5)
+            conn = get_connector(source_type)
+            if conn:
+                return await conn.search(q, limit=5)
             if source_type == "anilist":
                 return await search_anilist(q, limit=5)
             if source_type == "myanimelist":
                 return await search_myanimelist(q, limit=5)
-            if source_type == "mangasee":
-                return await search_mangasee(q, limit=5)
-            if source_type == "batoto":
-                return await search_batoto(q, limit=5)
-            if source_type == "asurascans":
-                return await search_asurascans(q, limit=5)
-            if source_type == "comick":
-                return await search_comick(q, limit=5)
-            if source_type == "flamescans":
-                return await search_flamescans(q, limit=5)
             if source_type == "mangal":
                 return await search_mangal_all(q, limit=5)
             return []
@@ -754,7 +700,7 @@ async def search_all_sources(q: str):
             logger.debug(f"[search-all] Source search failed ({source_type}): {e}")
             return []
     db = get_db()
-    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','mangasee','batoto','asurascans','comick','flamescans','mangal','anilist','myanimelist')").fetchall()
+    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1").fetchall()
     db.close()
     tasks = [search_source(r["id"], r["type"]) for r in rows]
     all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -768,55 +714,10 @@ async def search_all_sources(q: str):
 
 @router.get("/api/manga-source/{source}/{manga_id}/chapters")
 async def get_source_chapters(source: str, manga_id: str):
-    if source == "mangadex":
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.mangadex.org/manga/{manga_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100"
-            async with session.get(url) as resp:
-                data = await resp.json()
-        chapters = []
-        for ch in data.get("data", []):
-            attr = ch["attributes"]
-            chapters.append({
-                "id": ch["id"], "chapter": attr.get("chapter"),
-                "title": attr.get("title") or f"Chapter {attr.get('chapter','')}",
-                "pages": attr.get("pages", 0), "source": "mangadex"
-            })
-        return chapters
-    if source == "mangakakalot":
-        async with aiohttp.ClientSession() as session:
-            url = f"https://mangakakalot.com{manga_id}" if not manga_id.startswith("http") else manga_id
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for row in soup.select("ul.row-content-chapter li")[:500]:
-            link = row.select_one("a")
-            if link:
-                ch_text = link.text.strip()
-                import re
-                m = re.search(r'chapter\s*([\d.]+)', ch_text, re.I)
-                ch_num = m.group(1) if m else ch_text
-                chapters.append({"id": link.get("href", ""), "chapter": ch_num, "title": ch_text, "pages": 0, "source": "mangakakalot"})
-        chapters.reverse()
-        return chapters
-    if source == "mangafox":
-        async with aiohttp.ClientSession() as session:
-            url = f"https://fanfox.net{manga_id}" if not manga_id.startswith("http") else manga_id
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for row in soup.select(".detail-main-list li")[:500]:
-            link = row.select_one("a")
-            if link:
-                ch_text = link.select_one("span").text.strip() if link.select_one("span") else link.text.strip()
-                import re
-                m = re.search(r'ch\.?([\d.]+)', ch_text, re.I)
-                ch_num = m.group(1) if m else ch_text
-                chapters.append({"id": link.get("href", ""), "chapter": ch_num, "title": ch_text, "pages": 0, "source": "mangafox"})
-        return chapters
+    from .connectors import get_connector
+    conn = get_connector(source)
+    if conn:
+        return await conn.get_chapters(manga_id)
     if source == "myanimelist":
         async with aiohttp.ClientSession() as session:
             url = f"https://api.jikan.moe/v4/manga/{manga_id}"
@@ -831,16 +732,6 @@ async def get_source_chapters(source: str, manga_id: str):
                               "themes": [t["name"] for t in m.get("themes", [])], "serialization": [s["name"] for s in m.get("serialization", [])]}}]
     if source == "anilist":
         return []
-    if source == "mangasee":
-        return await get_mangasee_chapters(manga_id)
-    if source == "batoto":
-        return await get_batoto_chapters(manga_id)
-    if source == "asurascans":
-        return await get_asurascans_chapters(manga_id)
-    if source == "comick":
-        return await get_comick_chapters(manga_id)
-    if source == "flamescans":
-        return await get_flamescans_chapters(manga_id)
     if source.startswith("mangal_"):
         from .mangal_source import get_mangal_chapters
         mangal_src = source.split("mangal_", 1)[1]
@@ -1155,7 +1046,8 @@ async def find_external_metadata(manga_id: str, source: str = "anilist"):
 
 @router.post("/api/download")
 async def download_chapter(data: DownloadRequest):
-    job_id = create_job(data.source, data.manga_title, data.chapter_num, data.chapter_id)
+    fmt = data.output_format or "cbz"
+    job_id = create_job(data.source, data.manga_title, data.chapter_num, data.chapter_id, fmt)
     return {"job_id": job_id}
 
 @router.get("/api/download/{job_id}")
@@ -1164,6 +1056,22 @@ async def download_progress(job_id: str):
 
 @router.post("/api/download-all")
 async def download_all_chapters(data: DownloadRequest):
+    from .connectors import get_connector
+    conn = get_connector(data.source)
+    if conn:
+        chapters = await conn.get_chapters(data.chapter_id)
+        if not chapters:
+            raise HTTPException(404, "No chapters found for this source.")
+        fmt = data.output_format or "cbz"
+        job_ids = []
+        for ch in chapters:
+            ch_num = ch.get("chapter", "")
+            ch_id = ch.get("id", "")
+            if not ch_num or not ch_id:
+                continue
+            job_id = create_job(data.source, data.manga_title, str(ch_num), ch_id, fmt)
+            job_ids.append(job_id)
+        return {"job_ids": job_ids, "total": len(job_ids)}
     if data.source == "mangadex":
         async with aiohttp.ClientSession() as session:
             url = f"https://api.mangadex.org/manga/{data.chapter_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
@@ -1172,13 +1080,14 @@ async def download_all_chapters(data: DownloadRequest):
         chapters = manga_data.get("data", [])
         if not chapters:
             raise HTTPException(404, "No chapters found.")
+        fmt = data.output_format or "cbz"
         job_ids = []
         for ch in chapters:
             ch_id = ch["id"]
             ch_num = ch["attributes"].get("chapter")
             if not ch_num:
                 continue
-            job_id = create_job("mangadex", data.manga_title, str(ch_num), ch_id)
+            job_id = create_job("mangadex", data.manga_title, str(ch_num), ch_id, fmt)
             job_ids.append(job_id)
         return {"job_ids": job_ids, "total": len(job_ids)}
     if data.source.startswith("mangal_"):
@@ -1188,9 +1097,10 @@ async def download_all_chapters(data: DownloadRequest):
 @router.post("/api/download-chapters")
 async def download_chapters(data: dict):
     chapters = data.get("chapters", [])
+    fmt = data.get("output_format", "cbz") or "cbz"
     job_ids = []
     for ch in chapters:
-        job_id = create_job(ch["source"], ch["manga_title"], ch["chapter_num"], ch["chapter_id"])
+        job_id = create_job(ch["source"], ch["manga_title"], ch["chapter_num"], ch["chapter_id"], fmt)
         job_ids.append(job_id)
     return {"job_ids": job_ids, "total": len(job_ids)}
 

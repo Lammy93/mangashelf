@@ -719,6 +719,12 @@ async def search_manga(q: str, source: str = "mangadex"):
         return await search_comick(q)
     if source == "flamescans":
         return await search_flamescans(q)
+    if source == "mangal":
+        return await search_mangal_all(q)
+    if source.startswith("mangal_"):
+        src_name = source.split("mangal_", 1)[1]
+        from .mangal_source import search_mangal as _mangal_search
+        return await _mangal_search(q)
     return []
 
 @router.get("/api/search-all")
@@ -745,7 +751,7 @@ async def search_all_sources(q: str):
                 return await search_mangal_all(q, limit=5)
             return []
         except Exception as e:
-            logger.debug(f"[search-all] Source search failed: {e}")
+            logger.debug(f"[search-all] Source search failed ({source_type}): {e}")
             return []
     db = get_db()
     rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','mangasee','batoto','asurascans','comick','flamescans','mangal','anilist','myanimelist')").fetchall()

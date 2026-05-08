@@ -19,8 +19,8 @@
     </button>
     <div class="top-bar-title">Discover</div>
   </div>
-  <div class="page-content">
-    <h1>Discover Manga</h1>
+  <div class="content">
+    <h1 style="margin-bottom:1rem;">Discover Manga</h1>
     <div class="search-row">
       <input class="search-input" type="text" id="q" placeholder="Search title…" onkeydown="if(event.key==='Enter')doSearch()">
       <select class="search-input" id="source-sel"></select>
@@ -96,7 +96,7 @@ async function doSearch() {
     const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
     const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
     const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-    const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
+        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(m.source) || m.source.startsWith('mangal_');
     const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
     return `
     <div class="result-card" onclick="openManga(${i},'${srcType}')">
@@ -123,7 +123,7 @@ async function searchAll() {
   btn.classList.remove('loading'); btn.textContent = 'Search All';
 
   if (!data.length) {
-    document.getElementById('results-wrap').innerHTML = '<div class="empty-search"><h3>No results</h3><p>Try a different search term.</p></div>';
+    document.getElementById('results-wrap').innerHTML = '<div class="empty-search"><h3>No results</h3><p>No sources returned results. The external sites may be unavailable — try searching individual sources.</p></div>';
     return;
   }
 
@@ -134,19 +134,25 @@ async function searchAll() {
     grouped[src].push(m);
   });
 
-  const sourceNames = {mangadex:'MangaDex', anilist:'AniList', myanimelist:'MyAnimeList'};
+  const sourceNames = {
+    mangadex:'MangaDex', mangasee:'MangaSee', mangakakalot:'MangaKakalot',
+    mangafox:'MangaFox', anilist:'AniList', myanimelist:'MyAnimeList',
+    batoto:'Batoto', asurascans:'Asura Scans', comick:'ComicK',
+    flamescans:'Flame Scans', mangal:'mangal'
+  };
   let html = '';
   for (const [src, items] of Object.entries(grouped)) {
+    const label = sourceNames[src] || src;
     html += `<div class="source-group">
       <div class="source-group-header">
-        <span class="source-badge-sm ${src}">${sourceNames[src]||src}</span>
+        <span class="source-badge-sm ${src}">${label}</span>
         <span class="source-group-count">${items.length}</span>
       </div>
       <div class="results-grid">${items.map((m,i)=>{
         const coverUrl = m.cover ? (m.cover.includes('mangadex') ? m.cover.replace('.256.jpg', '.512.jpg') : m.cover) : '';
         const chInfo = m.chapters ? `<span class="ch-badge">${m.chapters} ch</span>` : '';
         const genres = (m.genres||[]).slice(0,2).map(g=>`<span class="genre-badge">${g}</span>`).join('');
-        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox'].includes(m.source) || m.source.startsWith('mangal_');
+        const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(m.source) || m.source.startsWith('mangal_');
         const isFollowed = window._followedIds && window._followedIds.includes(`${m.source}::${m.id}`);
         return `
         <div class="result-card" onclick="openManga(${i},'${src}')">
@@ -179,7 +185,7 @@ async function openManga(idx, sourceGroup) {
     : '';
   document.getElementById('modal-img').src = coverUrl;
   document.getElementById('modal-status').textContent = currentResult.status || '';
-  const isDownloadSource = ['mangadex', 'mangasee', 'mangakakalot', 'mangafox'].includes(currentResult.source);
+  const isDownloadSource = ['mangadex','mangasee','mangakakalot','mangafox','batoto','asurascans','comick','flamescans'].includes(currentResult.source);
   document.getElementById('dl-all-btn').style.display = isDownloadSource ? '' : 'none';
 
   if (isDownloadSource) {

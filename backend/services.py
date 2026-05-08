@@ -1,0 +1,607 @@
+import asyncio
+import logging
+import threading
+import time
+import uuid
+import zipfile
+from datetime import datetime
+from pathlib import Path
+
+import aiohttp
+import fitz
+import rarfile
+from bs4 import BeautifulSoup
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
+
+from .config import MANGA_DIR, CACHE_DIR, SUPPORTED_FORMATS, SUPPORTED_IMAGE_EXTS
+from .db import get_db, get_scan_setting, set_scan_setting, get_manga_directories, slugify
+from .nfo import read_nfo, write_nfo
+from .cache import _metadata_cache
+from .utils import (
+    logger, bg_submit, is_manga_processing, mark_manga_processing,
+    get_scan_progress, set_scan_progress, generate_id
+)
+
+# ── Extraction ──────────────────────────────────────────────────────────
+
+def extract_metadata(file_path: Path) -> dict:
+    suffix = file_path.suffix.lower()
+    meta = {}
+    try:
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                names = z.namelist()
+                comic_info = next((n for n in names if n.lower().endswith('comicinfo.xml')), None)
+                if comic_info:
+                    with z.open(comic_info) as f:
+                        import xml.etree.ElementTree as ET
+                        tree = ET.parse(f)
+                        root = tree.getroot()
+                        for tag in ['Series', 'Writer', 'Penciller', 'Genre', 'Summary', 'Publisher', 'Year', 'Volume', 'Number']:
+                            el = root.find(tag)
+                            if el is not None and el.text:
+                                meta[tag.lower()] = el.text.strip()
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                names = r.namelist()
+                comic_info = next((n for n in names if n.lower().endswith('comicinfo.xml')), None)
+                if comic_info:
+                    with r.open(comic_info) as f:
+                        import xml.etree.ElementTree as ET
+                        tree = ET.parse(f)
+                        root = tree.getroot()
+                        for tag in ['Series', 'Writer', 'Penciller', 'Genre', 'Summary', 'Publisher', 'Year', 'Volume', 'Number']:
+                            el = root.find(tag)
+                            if el is not None and el.text:
+                                meta[tag.lower()] = el.text.strip()
+        elif suffix == '.pdf':
+            try:
+                doc = fitz.open(str(file_path))
+                pdf_meta = doc.metadata
+                if pdf_meta:
+                    if pdf_meta.get('author'):
+                        meta['writer'] = pdf_meta['author']
+                    if pdf_meta.get('title'):
+                        meta['series'] = pdf_meta['title']
+                    doc.close()
+            except Exception as e:
+                logger.debug(f"[metadata] PDF read error: {e}")
+    except Exception as e:
+        logger.debug(f"[metadata] Extraction error for {file_path.name}: {e}")
+    return meta
+
+def extract_pages(file_path: Path) -> list:
+    suffix = file_path.suffix.lower()
+    out_dir = CACHE_DIR / file_path.stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pages = sorted([f for f in out_dir.iterdir() if f.suffix in SUPPORTED_IMAGE_EXTS])
+    if pages:
+        return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+
+    if suffix in ('.cbz', '.zip'):
+        with zipfile.ZipFile(file_path) as z:
+            imgs = sorted([n for n in z.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
+            for img in imgs:
+                z.extract(img, out_dir)
+    elif suffix in ('.cbr', '.rar'):
+        with rarfile.RarFile(file_path) as r:
+            imgs = sorted([n for n in r.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
+            for img in imgs:
+                r.extract(img, out_dir)
+    elif suffix == '.pdf':
+        try:
+            doc = fitz.open(str(file_path))
+            for i, page in enumerate(doc):
+                pix = page.get_pixmap(dpi=150)
+                pix.save(str(out_dir / f"page_{i:04d}.png"))
+            doc.close()
+        except Exception as e:
+            logger.warning(f"[pages] PDF error for {file_path.name}: {e}")
+
+    pages = sorted([f for f in out_dir.iterdir() if f.suffix in SUPPORTED_IMAGE_EXTS])
+    return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+
+def extract_chapter_bg(path: str):
+    stem = Path(path).stem
+    try:
+        file_path = Path(path)
+        suffix = file_path.suffix.lower()
+        out_dir = CACHE_DIR / stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                for img in sorted([n for n in z.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS]):
+                    out_path = out_dir / Path(img).name
+                    if not out_path.exists():
+                        out_path.write_bytes(z.read(img))
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                for img in sorted([n for n in r.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS]):
+                    out_path = out_dir / Path(img).name
+                    if not out_path.exists():
+                        out_path.write_bytes(r.read(img))
+        elif suffix == '.pdf':
+            doc = fitz.open(str(file_path))
+            for i in range(len(doc)):
+                cached = out_dir / f"page_{i:04d}.png"
+                if not cached.exists():
+                    doc[i].get_pixmap(dpi=150).save(str(cached))
+            doc.close()
+    except Exception as e:
+        logger.warning(f"[bg-extract] Error extracting {stem}: {e}")
+
+# ── Library Scanner ─────────────────────────────────────────────────────
+
+def scan_manga_dir():
+    directories = get_manga_directories()
+    set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
+    try:
+        all_items = []
+        for dir_conf in directories:
+            scan_path = Path(dir_conf["path"])
+            if not scan_path.exists():
+                continue
+            for item in scan_path.iterdir():
+                if item.is_dir() or item.suffix.lower() in SUPPORTED_FORMATS:
+                    all_items.append((scan_path, item))
+        set_scan_progress(total=sum(1 for _, item in all_items if item.is_dir()), message="Scanning...")
+        db = get_db()
+        new_manga_for_meta = []
+        for scan_path, item in all_items:
+            if item.is_dir():
+                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                existing = db.execute("SELECT id, slug FROM manga WHERE path=?", (str(item),)).fetchone()
+                if not existing:
+                    chapters = []
+                    for f in sorted(item.iterdir()):
+                        if f.suffix.lower() in SUPPORTED_FORMATS:
+                            chapters.append(f)
+                    if chapters:
+                        nfo = read_nfo(item)
+                        meta = nfo if (nfo and nfo.get("title")) else {}
+                        db.execute("""
+                            INSERT OR IGNORE INTO manga (
+                                id, title, slug, path, cover, total_chapters,
+                                last_read_chapter, last_read_page, reading_mode,
+                                source, source_id, added_at, updated_at, status,
+                                author, artist, genre, summary, publisher, year
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            manga_id,
+                            meta.get('title') or meta.get('series') or item.name,
+                            slugify(meta.get('title') or meta.get('series') or item.name),
+                            str(item),
+                            meta.get('cover'),
+                            meta.get('total_chapters') or len(chapters),
+                            0, 0, 'single',
+                            meta.get('source'), meta.get('source_id'),
+                            datetime.now().isoformat(), datetime.now().isoformat(),
+                            meta.get('status') or 'local',
+                            meta.get('author') or meta.get('writer'),
+                            meta.get('artist') or meta.get('penciller'),
+                            meta.get('genre'), meta.get('summary'),
+                            meta.get('publisher'), meta.get('year')
+                        ))
+                        title = meta.get('title') or meta.get('series') or item.name
+                        for i, ch in enumerate(chapters):
+                            ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(ch)))
+                            ch_num = float(i + 1)
+                            ch_slug = slugify(ch.stem)
+                            db.execute(
+                                "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (ch_id, manga_id, ch_num, ch.stem, str(ch), 0, 0, 0, None, 1, None, ch_slug)
+                            )
+                        sp = get_scan_progress()
+                        sp["new_manga"].append({"id": manga_id, "path": str(item), "title": title})
+                        if not nfo or not nfo.get("title") or not nfo.get("author"):
+                            new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": title})
+                    set_scan_progress(current=(get_scan_progress()["current"] + 1), message=f"Scanned {get_scan_progress()['current']}/{get_scan_progress()['total']}")
+            elif item.suffix.lower() in SUPPORTED_FORMATS:
+                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                existing = db.execute("SELECT id FROM manga WHERE path=?", (str(item),)).fetchone()
+                if not existing:
+                    db.execute("""
+                        INSERT OR IGNORE INTO manga (
+                            id, title, slug, path, cover, total_chapters,
+                            last_read_chapter, last_read_page, reading_mode,
+                            source, source_id, added_at, updated_at, status,
+                            author, artist, genre, summary, publisher, year
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        manga_id, item.stem, slugify(item.stem), str(item),
+                        None, 1, 0, 0, 'single',
+                        None, None, datetime.now().isoformat(), datetime.now().isoformat(),
+                        'local', None, None, None, None, None, None
+                    ))
+                    ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(item)))
+                    ch_slug = slugify(item.stem)
+                    db.execute(
+                        "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (ch_id, manga_id, 1.0, item.stem, str(item), 0, 0, 0, None, 1, None, ch_slug)
+                    )
+                    sp = get_scan_progress()
+                    sp["new_manga"].append({"id": manga_id, "path": str(item), "title": item.stem})
+                    new_manga_for_meta.append({"id": manga_id, "path": str(item), "title": item.stem})
+        db.commit()
+        db.close()
+        sp = get_scan_progress()
+        new_count = len(sp["new_manga"])
+        set_scan_progress(message=f"Scan complete. Found {new_count} new series. Post-processing...")
+        for nm in new_manga_for_meta:
+            bg_submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
+        for nm in sp["new_manga"]:
+            bg_submit(pre_extract_pages, nm["id"])
+        set_scan_progress(message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.")
+    except Exception as e:
+        logger.error(f"[scan] Failed: {e}")
+        set_scan_progress(message=f"Scan failed: {e}")
+    finally:
+        set_scan_progress(running=False)
+
+def pre_extract_pages(manga_id: str):
+    mark_manga_processing(manga_id, True)
+    try:
+        db = get_db()
+        chapters = db.execute("SELECT id, path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
+        db.close()
+        for ch in chapters:
+            p = Path(ch["path"])
+            if p.exists():
+                out_dir = CACHE_DIR / p.stem
+                if not out_dir.exists() or not any(out_dir.iterdir()):
+                    extract_pages(p)
+    except Exception as e:
+        logger.error(f"[pre-extract] Failed for manga {manga_id}: {e}")
+    finally:
+        mark_manga_processing(manga_id, False)
+
+# ── Folder Watcher ──────────────────────────────────────────────────────
+
+_scan_lock = threading.Lock()
+_scan_pending = False
+_last_scan = 0.0
+_watcher = None
+
+def get_scan_cooldown():
+    interval = int(get_scan_setting("scan_interval") or 300)
+    return max(5, interval / 2)
+
+def debounced_scan():
+    global _scan_pending, _last_scan
+    if get_scan_setting("scan_on_folder_change") != "1":
+        return
+    now = time.time()
+    cooldown = get_scan_cooldown()
+    if now - _last_scan < cooldown:
+        return
+    with _scan_lock:
+        if not _scan_pending:
+            _scan_pending = True
+            def do_scan():
+                global _scan_pending, _last_scan
+                try:
+                    scan_manga_dir()
+                finally:
+                    _scan_pending = False
+                    _last_scan = time.time()
+            threading.Thread(target=do_scan, daemon=True).start()
+
+class MangaDirHandler(FileSystemEventHandler):
+    SUPPORTED_EXTS = {'.cbz', '.cbr', '.pdf', '.zip', '.rar', '.epub'}
+
+    def _should_trigger(self, event: FileSystemEvent) -> bool:
+        if event.is_directory:
+            return True
+        return Path(event.src_path).suffix.lower() in self.SUPPORTED_EXTS
+
+    def on_created(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+    def on_deleted(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+    def on_moved(self, event: FileSystemEvent):
+        debounced_scan()
+
+    def on_closed(self, event: FileSystemEvent):
+        if self._should_trigger(event):
+            debounced_scan()
+
+def start_folder_watcher():
+    global _watcher
+    if _watcher:
+        _watcher.stop()
+    if get_scan_setting("watch_enabled") != "1":
+        return
+    _watcher = Observer()
+    directories = get_manga_directories()
+    for dir_conf in directories:
+        d = Path(dir_conf["path"])
+        if d.exists():
+            _watcher.schedule(MangaDirHandler(), str(d), recursive=True)
+    _watcher.daemon = True
+    _watcher.start()
+
+def start_interval_scanner():
+    if get_scan_setting("auto_scan_enabled") != "1":
+        return
+    def interval_loop():
+        while True:
+            interval = int(get_scan_setting("scan_interval") or 300)
+            time.sleep(interval)
+            if get_scan_setting("auto_scan_enabled") != "1":
+                break
+            scan_manga_dir()
+    threading.Thread(target=interval_loop, daemon=True).start()
+
+def start_followed_updates_checker():
+    def check_loop():
+        while True:
+            interval = int(get_scan_setting("scan_interval") or 300)
+            time.sleep(interval)
+            db = get_db()
+            followed = db.execute("SELECT * FROM followed_manga WHERE user_id IS NOT NULL").fetchall()
+            db.close()
+            for item in followed:
+                source = item["source"]
+                source_id = item["source_id"]
+                try:
+                    if source == "mangadex":
+                        async def _check_md():
+                            async with aiohttp.ClientSession() as session:
+                                url = f"https://api.mangadex.org/manga/{source_id}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=1"
+                                async with session.get(url) as resp:
+                                    data = await resp.json()
+                            return len(data.get("data", [])) if data.get("data") else item["last_chapter_count"]
+                        new_count = asyncio.run(_check_md())
+                        if new_count > item["last_chapter_count"]:
+                            db_up = get_db()
+                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db_up.commit()
+                            db_up.close()
+                    elif source == "mangakakalot":
+                        async def _check_mkk():
+                            url = f"https://mangakakalot.com{source_id}" if not source_id.startswith("http") else source_id
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(url, headers=headers) as resp:
+                                    html = await resp.text()
+                            soup = BeautifulSoup(html, "html.parser")
+                            chapters = soup.select("ul.row-content-chapter li")
+                            return len(chapters)
+                        new_count = asyncio.run(_check_mkk())
+                        if new_count > item["last_chapter_count"]:
+                            db_up = get_db()
+                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db_up.commit()
+                            db_up.close()
+                    elif source == "mangafox":
+                        async def _check_mf():
+                            url = f"https://fanfox.net{source_id}" if not source_id.startswith("http") else source_id
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(url, headers=headers) as resp:
+                                    html = await resp.text()
+                            soup = BeautifulSoup(html, "html.parser")
+                            chapters = soup.select(".detail-main-list li")
+                            return len(chapters)
+                        new_count = asyncio.run(_check_mf())
+                        if new_count > item["last_chapter_count"]:
+                            db_up = get_db()
+                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                            db_up.commit()
+                            db_up.close()
+                except Exception as e:
+                    logger.debug(f"[followed] Update check failed for {item.get('title','')}: {e}")
+    threading.Thread(target=check_loop, daemon=True).start()
+
+# ── Metadata ────────────────────────────────────────────────────────────
+
+async def download_and_cache_cover(url: str, cache_name: str) -> str:
+    if not url or url.startswith("/"):
+        return url
+    cache_path = CACHE_DIR / f"{cache_name}.jpg"
+    if cache_path.exists():
+        return f"/cache/{cache_name}.jpg"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    cache_path.write_bytes(data)
+                    return f"/cache/{cache_name}.jpg"
+    except:
+        pass
+    return url
+
+def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
+    mark_manga_processing(manga_id, True)
+    try:
+        logger.info(f"[metadata] Fetching for '{manga_title}' ({manga_id})")
+        db = get_db()
+        manga_row = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+        existing = dict(manga_row) if manga_row else {}
+        db.close()
+
+        async def _fetch():
+            query = """
+            query($search: String, $type: MediaType) {
+              Page(perPage: 3) {
+                media(search: $search, type: $type, isAdult: false) {
+                  id title { romaji english native } coverImage { large medium }
+                  status description(asHtml: false) chapters volumes genres format
+                  staff { edges { role node { name { full } } } }
+                }
+              }
+            }"""
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://graphql.anilist.co",
+                    json={"query": query, "variables": {"search": manga_title, "type": "MANGA"}}
+                ) as resp:
+                    data = await resp.json()
+            media_list = data.get("data", {}).get("Page", {}).get("media", [])
+            if not media_list:
+                logger.info(f"[metadata] No results for '{manga_title}'")
+                return
+            best = None
+            for m in media_list:
+                title = (m["title"].get("english") or m["title"].get("romaji") or "").lower()
+                if title and any(word in title for word in manga_title.lower().split()):
+                    best = m
+                    break
+            if not best:
+                best = media_list[0]
+            title = best["title"].get("english") or best["title"].get("romaji") or best["title"].get("native") or ""
+            authors = [e["node"]["name"]["full"] for e in best.get("staff", {}).get("edges", []) if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
+            cover_url = best.get("coverImage", {}).get("large") or best.get("coverImage", {}).get("medium")
+            cached_cover = await download_and_cache_cover(cover_url, f"{manga_id}_cover")
+            db = get_db()
+            db.execute(
+                "UPDATE manga SET title=?, slug=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, cover=?, updated_at=? WHERE id=?",
+                (
+                    title, slugify(title),
+                    authors[0] if authors else existing.get("author"),
+                    authors[1] if len(authors) > 1 else existing.get("artist"),
+                    ", ".join(best.get("genres", [])) or existing.get("genre"),
+                    (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                    best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                    best.get("chapters") or existing.get("total_chapters", 0),
+                    cached_cover, datetime.now().isoformat(), manga_id
+                )
+            )
+            db.commit()
+            p = Path(manga_path)
+            if p.is_dir():
+                existing_nfo = read_nfo(p)
+                nfo_data = {
+                    "Title": title,
+                    "Author": authors[0] if authors else existing.get("author"),
+                    "Artist": authors[1] if len(authors) > 1 else existing.get("artist"),
+                    "Genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
+                    "Summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                    "Status": best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                    "TotalChapters": best.get("chapters") or existing.get("total_chapters", 0),
+                    "Cover": cached_cover,
+                    "Source": "anilist",
+                    "SourceId": str(best["id"])
+                }
+                for k, v in nfo_data.items():
+                    if v is not None and v != "" and v != 0:
+                        existing_nfo[k] = v
+                write_nfo(p, existing_nfo)
+                logger.info(f"[metadata] Wrote NFO for '{title}' at {p}")
+            else:
+                logger.info(f"[metadata] Skipped NFO write (not a directory): {manga_path}")
+            db.close()
+            logger.info(f"[metadata] Updated DB for '{title}' ({manga_id})")
+
+        asyncio.run(_fetch())
+    except Exception as e:
+        logger.error(f"[metadata] Failed for '{manga_title}': {e}")
+    finally:
+        mark_manga_processing(manga_id, False)
+
+# ── External API helpers ────────────────────────────────────────────────
+
+async def search_mangadex(q: str, limit: int = 20) -> list:
+    async with aiohttp.ClientSession() as session:
+        url = f"https://api.mangadex.org/manga?title={q}&limit={limit}&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive"
+        async with session.get(url) as resp:
+            data = await resp.json()
+    results = []
+    for m in data.get("data", []):
+        attr = m["attributes"]
+        title = attr["title"].get("en") or next(iter(attr["title"].values()), "Unknown")
+        cover_rel = next((r for r in m["relationships"] if r["type"] == "cover_art"), None)
+        cover = None
+        if cover_rel and cover_rel.get("attributes"):
+            fname = cover_rel["attributes"]["fileName"]
+            cover = f"https://uploads.mangadex.org/covers/{m['id']}/{fname}.256.jpg"
+        results.append({
+            "id": m["id"], "title": title, "cover": cover,
+            "status": attr.get("status"), "source": "mangadex",
+            "description": next(iter(attr.get("description", {}).values()), "")[:200]
+        })
+    return results
+
+async def search_anilist(q: str, limit: int = 20) -> list:
+    query = """
+    query($search: String, $type: MediaType, $perPage: Int) {
+      Page(perPage: $perPage) {
+        media(search: $search, type: $type, isAdult: false) {
+          id title { romaji english native } coverImage { large medium }
+          status description(asHtml: false) chapters genres format
+        }
+      }
+    }"""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://graphql.anilist.co",
+            json={"query": query, "variables": {"search": q, "type": "MANGA", "perPage": limit}}
+        ) as resp:
+            data = await resp.json()
+    results = []
+    for m in data.get("data", {}).get("Page", {}).get("media", []):
+        title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or "Unknown"
+        cover = m.get("coverImage", {}).get("large") or m.get("coverImage", {}).get("medium")
+        results.append({
+            "id": str(m["id"]), "title": title, "cover": cover,
+            "status": m.get("status", "").upper() if m.get("status") else None,
+            "source": "anilist",
+            "description": (m.get("description") or "")[:200] if m.get("description") else "",
+            "chapters": m.get("chapters"), "genres": m.get("genres", [])
+        })
+    return results
+
+async def search_myanimelist(q: str, limit: int = 20) -> list:
+    async with aiohttp.ClientSession() as session:
+        url = f"https://api.jikan.moe/v4/manga?q={q}&limit={limit}&sfw=true"
+        async with session.get(url) as resp:
+            data = await resp.json()
+    results = []
+    for m in data.get("data", []):
+        results.append({
+            "id": str(m["mal_id"]), "title": m.get("title") or m.get("title_english") or "Unknown",
+            "cover": m.get("images", {}).get("jpg", {}).get("large_image_url") or m.get("images", {}).get("jpg", {}).get("image_url"),
+            "status": m.get("status", "").upper() if m.get("status") else None,
+            "source": "myanimelist",
+            "description": (m.get("synopsis") or "")[:200] if m.get("synopsis") else "",
+            "chapters": m.get("chapters"), "genres": [g["name"] for g in m.get("genres", [])]
+        })
+    return results
+
+# ── Downloads ───────────────────────────────────────────────────────────
+
+download_status = {}
+
+async def download_mangadex_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        download_status[job_id] = {"status": "downloading", "progress": 0, "error": None}
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.mangadex.org/at-home/server/{chapter_id}"
+            async with session.get(url) as resp:
+                data = await resp.json()
+            base = data["baseUrl"]
+            hash_ = data["chapter"]["hash"]
+            pages = data["chapter"]["data"]
+            out_dir = MANGA_DIR / manga_title
+            out_dir.mkdir(parents=True, exist_ok=True)
+            cbz_path = out_dir / f"Chapter_{float(chapter_num):06.1f}.cbz"
+            imgs = []
+            for i, page in enumerate(pages):
+                img_url = f"{base}/data/{hash_}/{page}"
+                async with session.get(img_url) as r:
+                    imgs.append((page, await r.read()))
+                download_status[job_id]["progress"] = int((i+1)/len(pages)*100)
+            with zipfile.ZipFile(cbz_path, 'w') as z:
+                for name, data_ in imgs:
+                    z.writestr(name, data_)
+        download_status[job_id] = {"status": "complete", "progress": 100, "error": None}
+        scan_manga_dir()
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}

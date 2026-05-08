@@ -24,14 +24,18 @@ RUN apt-get update && apt-get install -y \
     unrar-free \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd -r mangashelf && useradd -r -g mangashelf -d /app -s /sbin/nologin mangashelf
+
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
-RUN mkdir -p /data
+RUN mkdir -p /data /data/avatars /data/cache && chown -R mangashelf:mangashelf /data
 
 EXPOSE 8080
+
+USER mangashelf
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/docs')" || exit 1

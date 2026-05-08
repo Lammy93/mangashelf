@@ -39,7 +39,7 @@ from .services import (
     auto_fetch_metadata, extract_metadata, pre_extract_pages,
     _run_download_job, search_mangal_all
 )
-from .job_queue import create_job, get_job, list_jobs, cancel_job, start_worker
+from .job_queue import create_job, get_job, list_jobs, cancel_job, retry_job, retry_all_failed, clear_completed, start_worker
 
 router = APIRouter()
 
@@ -468,6 +468,18 @@ async def set_reading_mode(manga_id: str, data: ReadingModeUpdate):
     db.execute("UPDATE manga SET reading_mode=? WHERE id=?", (data.mode, manga_id))
     db.commit(); db.close()
     return {"ok": True}
+
+@router.post("/api/manga/{manga_id}/auto-download")
+async def toggle_auto_download(manga_id: str, request: Request):
+    require_auth(request)
+    db = get_db()
+    current = db.execute("SELECT auto_download FROM manga WHERE id=?", (manga_id,)).fetchone()
+    if current is None:
+        raise HTTPException(404, "Manga not found")
+    new_val = 0 if current["auto_download"] else 1
+    db.execute("UPDATE manga SET auto_download=? WHERE id=?", (new_val, manga_id))
+    db.commit(); db.close()
+    return {"ok": True, "auto_download": new_val}
 
 # ── Chapter Pages ───────────────────────────────────────────────────────
 
@@ -1146,24 +1158,58 @@ async def download_progress(job_id: str):
 
 @router.post("/api/download-all")
 async def download_all_chapters(data: DownloadRequest):
+    if data.source == "mangadex":
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.mangadex.org/manga/{data.chapter_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
+            async with session.get(url) as resp:
+                manga_data = await resp.json()
+        chapters = manga_data.get("data", [])
+        if not chapters:
+            raise HTTPException(404, "No chapters found.")
+        job_ids = []
+        for ch in chapters:
+            ch_id = ch["id"]
+            ch_num = ch["attributes"].get("chapter")
+            if not ch_num:
+                continue
+            job_id = create_job("mangadex", data.manga_title, str(ch_num), ch_id)
+            job_ids.append(job_id)
+        return {"job_ids": job_ids, "total": len(job_ids)}
     if data.source.startswith("mangal_"):
         return {"job_ids": [], "total": 0, "error": "Download-all not supported for mangal sources"}
-    async with aiohttp.ClientSession() as session:
-        url = f"https://api.mangadex.org/manga/{data.chapter_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
-        async with session.get(url) as resp:
-            manga_data = await resp.json()
-    chapters = manga_data.get("data", [])
-    if not chapters:
-        raise HTTPException(404, "No chapters found.")
+    return {"job_ids": [], "total": 0, "error": f"Download-all not supported for {data.source}"}
+
+@router.post("/api/download-chapters")
+async def download_chapters(data: dict):
+    chapters = data.get("chapters", [])
     job_ids = []
     for ch in chapters:
-        ch_id = ch["id"]
-        ch_num = ch["attributes"].get("chapter")
-        if not ch_num:
-            continue
-        job_id = create_job("mangadex", data.manga_title, str(ch_num), ch_id)
+        job_id = create_job(ch["source"], ch["manga_title"], ch["chapter_num"], ch["chapter_id"])
         job_ids.append(job_id)
     return {"job_ids": job_ids, "total": len(job_ids)}
+
+@router.get("/api/downloads/queue")
+async def get_download_queue(request: Request):
+    require_auth(request)
+    return list_jobs(200)
+
+@router.post("/api/downloads/retry/{job_id}")
+async def retry_job_route(job_id: str, request: Request):
+    require_auth(request)
+    retry_job(job_id)
+    return {"ok": True}
+
+@router.post("/api/downloads/retry-all")
+async def retry_all_failed_route(request: Request):
+    require_auth(request)
+    retry_all_failed()
+    return {"ok": True}
+
+@router.post("/api/downloads/clear-completed")
+async def clear_completed_route(request: Request):
+    require_auth(request)
+    clear_completed()
+    return {"ok": True}
 
 # ── Jobs ──────────────────────────────────────────────────────────────
 

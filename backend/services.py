@@ -566,6 +566,52 @@ def start_followed_updates_checker():
                     logger.debug(f"[followed] Update check failed for {item.get('title','')}: {e}")
     threading.Thread(target=check_loop, daemon=True).start()
 
+
+def start_auto_downloader():
+    def check_loop():
+        while True:
+            try:
+                time.sleep(3600)
+                db = get_db()
+                rows = db.execute(
+                    "SELECT id, title, source, source_id FROM manga WHERE auto_download=1 AND source IS NOT NULL AND source_id IS NOT NULL"
+                ).fetchall()
+                db.close()
+                for row in rows:
+                    try:
+                        _check_and_download_new_chapters(row)
+                    except Exception as e:
+                        logger.debug(f"[auto-dl] Check failed for {row['title']}: {e}")
+            except Exception as e:
+                logger.error(f"[auto-dl] Loop error: {e}")
+    threading.Thread(target=check_loop, daemon=True).start()
+
+def _check_and_download_new_chapters(manga: dict):
+    source = manga["source"]
+    source_id = manga["source_id"]
+    if source == "mangadex":
+        import asyncio
+        async def _fetch():
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.mangadex.org/manga/{source_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500"
+                async with session.get(url) as resp:
+                    data = await resp.json()
+            return data.get("data", [])
+        chapters = asyncio.run(_fetch())
+        db = get_db()
+        existing = {r["chapter_number"] for r in db.execute(
+            "SELECT chapter_number FROM chapters WHERE manga_id=?", (manga["id"],)
+        ).fetchall()}
+        from .job_queue import create_job
+        for ch in chapters:
+            ch_num = ch["attributes"].get("chapter")
+            if ch_num and float(ch_num) not in existing:
+                ch_id = ch["id"]
+                create_job("mangadex", manga["title"], str(ch_num), ch_id)
+                logger.info(f"[auto-dl] Queued {manga['title']} ch.{ch_num}")
+        db.close()
+
+
 # ── Metadata ────────────────────────────────────────────────────────────
 
 async def download_and_cache_cover(url: str, cache_name: str) -> str:

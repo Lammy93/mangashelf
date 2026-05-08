@@ -198,10 +198,12 @@ function renderHero() {
         <div class="hero-actions">
           <button class="btn btn-primary" onclick="readFirst()">▶ Read First</button>
           <button class="btn btn-ghost" id="detail-fav-btn" onclick="toggleDetailFav()">♡ Favorite</button>
+          <button class="btn btn-ghost" id="auto-dl-btn" onclick="toggleAutoDownload()">⬇ Auto-DL</button>
           <button class="btn btn-ghost" onclick="openEditModal()">✎ Edit</button>
         </div>
       </div>
     </div>`;
+  updateAutoDlBtn();
 }
 
 function renderVolumes() {
@@ -432,6 +434,29 @@ async function toggleDetailFav() {
   await fetch(`/api/manga/${MANGA_ID}/favorite`, {method:'POST'});
   _isFavorited = !_isFavorited;
   updateFavBtn();
+}
+
+async function toggleAutoDownload() {
+  const res = await fetch(`/api/manga/${MANGA_ID}/auto-download`, {method:'POST'});
+  const result = await res.json();
+  if (result.ok) {
+    data.manga.auto_download = result.auto_download;
+    updateAutoDlBtn();
+  }
+}
+
+function updateAutoDlBtn() {
+  const btn = document.getElementById('auto-dl-btn');
+  if (!btn) return;
+  if (data.manga.auto_download) {
+    btn.textContent = '⬇ Auto-DL On';
+    btn.style.borderColor = 'var(--accent)';
+    btn.style.color = 'var(--accent)';
+  } else {
+    btn.textContent = '⬇ Auto-DL';
+    btn.style.borderColor = '';
+    btn.style.color = '';
+  }
 }
 
 loadFavStatus();

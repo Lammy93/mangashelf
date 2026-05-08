@@ -65,7 +65,8 @@ def init_db():
             genre TEXT,
             summary TEXT,
             publisher TEXT,
-            year INTEGER
+            year INTEGER,
+            auto_download INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS volumes (
             id TEXT PRIMARY KEY,
@@ -188,6 +189,7 @@ def migrate_db():
     add_col("chapters", "volume_id", "TEXT", "NULL")
     add_col("chapters", "slug", "TEXT", "NULL")
     add_col("manga", "slug", "TEXT", "NULL")
+    add_col("manga", "auto_download", "INTEGER", "0")
     for row in db.execute("SELECT id, title FROM manga WHERE slug IS NULL AND title IS NOT NULL"):
         db.execute("UPDATE manga SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
     for row in db.execute("SELECT id, title FROM chapters WHERE slug IS NULL AND title IS NOT NULL"):

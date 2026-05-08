@@ -179,6 +179,13 @@ async def search_page(request: Request):
         return RedirectResponse(url="/login")
     return templates.TemplateResponse("search.html", {"request": request, "user": user})
 
+@router.get("/downloads")
+async def downloads_page(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("downloads.html", {"request": request, "user": user})
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 def _resolve_manga(identifier: str):

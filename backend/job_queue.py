@@ -62,7 +62,30 @@ def list_jobs(limit: int = 50) -> list:
 
 def cancel_job(job_id: str):
     db = get_db()
-    db.execute("UPDATE download_jobs SET status='cancelled' WHERE id=? AND status='queued'", (job_id,))
+    db.execute("UPDATE download_jobs SET status='cancelled' WHERE id=? AND status IN ('queued','running')", (job_id,))
+    db.commit()
+    db.close()
+
+def retry_job(job_id: str):
+    db = get_db()
+    db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE id=? AND status IN ('failed','cancelled')", (job_id,))
+    db.commit()
+    db.close()
+
+def retry_all_failed():
+    db = get_db()
+    db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE status='failed'")
+    db.commit()
+    db.close()
+
+def clear_completed(older_than_hours: int = 0):
+    db = get_db()
+    if older_than_hours > 0:
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat()
+        db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled') AND completed_at < ?", (cutoff,))
+    else:
+        db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled')")
     db.commit()
     db.close()
 

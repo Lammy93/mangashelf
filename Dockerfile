@@ -31,10 +31,11 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
-RUN mkdir -p /data /data/avatars /data/cache && chown -R mangashelf:mangashelf /data
+COPY entrypoint.py /entrypoint.py
 
 EXPOSE 8080
 
+ENTRYPOINT ["/entrypoint.py"]
 USER mangashelf
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

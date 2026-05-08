@@ -32,11 +32,11 @@ COPY --from=builder /install /usr/local
 COPY --from=builder /app .
 
 COPY entrypoint.py /entrypoint.py
+RUN chmod +x /entrypoint.py
 
 EXPOSE 8080
 
 ENTRYPOINT ["/entrypoint.py"]
-USER mangashelf
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/docs')" || exit 1

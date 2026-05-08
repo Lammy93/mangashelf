@@ -129,6 +129,16 @@ let currentChapterId = CHAPTER_ID;
 let allChapters = [];
 let toolbarVisible = true;
 let saveTimer = null;
+let _preloadCache = {};
+
+function preloadPages(startIdx, count = 4) {
+  for (let i = startIdx; i < startIdx + count && i < pages.length; i++) {
+    if (!_preloadCache[i]) {
+      _preloadCache[i] = new Image();
+      _preloadCache[i].src = pages[i];
+    }
+  }
+}
 
 async function init() {
   const res = await fetch(`/api/manga/${MANGA_ID}`);
@@ -147,12 +157,14 @@ async function init() {
 async function loadChapter(chapterId) {
   document.getElementById('loading').classList.remove('hidden');
   currentChapterId = chapterId;
+  _preloadCache = {};
   const res = await fetch(`/api/chapter/${chapterId}/pages`);
   const data = await res.json();
   pages = data.pages;
   currentPage = 0;
   renderPages();
   document.getElementById('loading').classList.add('hidden');
+  preloadPages(1, 4);
 }
 
 function renderPages() {
@@ -212,6 +224,7 @@ function nextPage() {
     } else { nextChapter(); return; }
   }
   updatePageInfo(); updateProgress(); scheduleSave();
+  preloadPages(currentPage + 1, 4);
 }
 
 function prevPage() {

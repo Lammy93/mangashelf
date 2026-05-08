@@ -11,12 +11,14 @@ os.makedirs("/data/cache", exist_ok=True)
 if os.geteuid() == 0:
     uid = pwd.getpwnam("mangashelf").pw_uid
     gid = grp.getgrnam("mangashelf").gr_gid
-    for root, dirs, files in os.walk("/data"):
-        for d in dirs:
-            os.chown(os.path.join(root, d), uid, gid)
-        for f in files:
-            os.chown(os.path.join(root, f), uid, gid)
-    os.chown("/data", uid, gid)
+    for vol in ("/data", "/manga"):
+        if os.path.exists(vol):
+            for root, dirs, files in os.walk(vol):
+                for d in dirs:
+                    os.chown(os.path.join(root, d), uid, gid)
+                for f in files:
+                    os.chown(os.path.join(root, f), uid, gid)
+            os.chown(vol, uid, gid)
     os.setgroups([])
     os.setresgid(gid, gid, gid)
     os.setresuid(uid, uid, uid)

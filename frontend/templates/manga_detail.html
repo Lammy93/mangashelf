@@ -49,6 +49,15 @@
   .meta-result-info{flex:1;min-width:0;}
   .meta-result-title{font-size:.85rem;font-weight:600;margin-bottom:.2rem;}
   .meta-result-meta{font-size:.72rem;color:var(--muted);}
+  .skeleton{background:var(--surface2);border-radius:8px;animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:.7}}
+  .skeleton-hero{display:flex;gap:2rem;padding:0;flex-wrap:wrap;}
+  .skeleton-cover{width:200px;aspect-ratio:2/3;flex-shrink:0;}
+  .skeleton-info{flex:1;min-width:240px;display:flex;flex-direction:column;gap:.6rem;}
+  .skeleton-title{height:1.8rem;width:60%;}
+  .skeleton-text{height:.9rem;width:40%;}
+  .skeleton-text2{height:.9rem;width:80%;}
+  .skeleton-text3{height:4rem;width:100%;}
   .meta-apply-btn{padding:.35rem .7rem;border-radius:5px;border:none;background:var(--accent);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .2s;}
   .meta-apply-btn:hover{background:#c93530;}
   .meta-apply-btn.applied{background:#2a5c2a;color:#7de87d;cursor:default;}
@@ -80,7 +89,17 @@
     <div class="top-bar-title"><a href="/" style="color:var(--text);text-decoration:none;">← Back to Library</a></div>
   </div>
   <div class="content">
-    <div id="hero-wrap"></div>
+    <div id="hero-wrap">
+      <div class="skeleton-hero" id="hero-skeleton">
+        <div class="skeleton skeleton-cover"></div>
+        <div class="skeleton-info">
+          <div class="skeleton skeleton-title"></div>
+          <div class="skeleton skeleton-text"></div>
+          <div class="skeleton skeleton-text2"></div>
+          <div class="skeleton skeleton-text3"></div>
+        </div>
+      </div>
+    </div>
 
     <div class="tabs">
       <div class="tab active" onclick="switchTab('volumes')">Volumes</div>
@@ -88,7 +107,10 @@
     </div>
 
     <div class="tab-content active" id="tab-volumes">
-      <div class="vol-grid" id="vol-grid"></div>
+      <div id="skeleton-vol-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1rem;">
+        ${[1,2,3,4,5,6].map(()=>'<div class="skeleton" style="aspect-ratio:2/3;border-radius:var(--radius);"></div>').join('')}
+      </div>
+      <div id="vol-grid" style="display:none;"></div>
       <div class="chapter-list" id="vol-chapters"></div>
     </div>
     <div class="tab-content" id="tab-chapters">
@@ -130,16 +152,20 @@ let activeVol = null;
 async function load() {
   const res = await fetch(`/api/manga/${MANGA_ID}`);
   data = await res.json();
+  document.getElementById('hero-skeleton')?.remove();
+  document.getElementById('skeleton-vol-grid')?.remove();
+  document.getElementById('vol-grid').style.display = '';
   renderHero();
-  renderVolumes();
-  renderAllChapters();
-
-  if (data.volumes.length) {
-    selectVolume(data.volumes[0].id);
-  } else {
-    document.querySelector('.tab[onclick*="volumes"]').textContent = 'Chapters';
-    renderVolChapters(null);
-  }
+  setTimeout(() => {
+    renderVolumes();
+    renderAllChapters();
+    if (data.volumes.length) {
+      selectVolume(data.volumes[0].id);
+    } else {
+      document.querySelector('.tab[onclick*="volumes"]').textContent = 'Chapters';
+      renderVolChapters(null);
+    }
+  }, 10);
   if (!data.manga.author || !data.manga.genre || !data.manga.summary) {
     autoFetchMetadataIfMissing();
   }
@@ -319,19 +345,18 @@ async function searchMatch() {
   if (!q) return;
   const statusEl = document.getElementById('match-status');
   const resultsEl = document.getElementById('match-results');
-  statusEl.textContent = 'Searching…';
+  statusEl.textContent = 'Searching AniList & MyAnimeList…';
   resultsEl.style.display = 'none';
   const res = await fetch(`/api/search-all?q=${encodeURIComponent(q)}`);
-  const data = await res.json();
+  const all = await res.json();
+  const data = all.filter(r => r.source === 'anilist' || r.source === 'myanimelist');
   if (!data.length) {
-    statusEl.textContent = 'No matches found. Try a different title.';
+    statusEl.textContent = 'No matches found on metadata sources. Try a different title.';
     return;
   }
-  const sourceLabels = {mangadex: 'MangaDex', anilist: 'AniList', myanimelist: 'MyAnimeList'};
-  const metadataSources = ['anilist', 'myanimelist'];
+  const sourceLabels = {anilist: 'AniList', myanimelist: 'MyAnimeList'};
   resultsEl.innerHTML = data.map(r => {
     const label = sourceLabels[r.source] || r.source;
-    const isMeta = metadataSources.includes(r.source);
     const coverUrl = r.cover || '';
     return `<div class="match-result">
       <img src="${coverUrl}" alt="" onerror="this.style.display='none'">
@@ -339,10 +364,10 @@ async function searchMatch() {
         <div class="match-result-title">${r.title}</div>
         <div class="match-result-meta">${label}${r.chapters ? ` · ${r.chapters}ch` : ''}${r.status ? ' · '+r.status : ''}</div>
       </div>
-      <button class="match-apply-btn ${isMeta ? 'primary' : ''}" onclick="applyMatch('${r.source}','${r.id.replace(/'/g, "\\'")}','${(r.cover||'').replace(/'/g, "\\'")}','${(r.title||'').replace(/'/g, "\\'")}',this)">${isMeta ? 'Apply (Full)' : 'Apply (Cover)'}</button>
+      <button class="match-apply-btn primary" onclick="applyMatch('${r.source}','${r.id.replace(/'/g, "\\'")}','${(r.cover||'').replace(/'/g, "\\'")}','${(r.title||'').replace(/'/g, "\\'")}',this)">Apply</button>
     </div>`;
   }).join('');
-  statusEl.textContent = `${data.length} result(s) found. Click Apply to update metadata & cover.`;
+  statusEl.textContent = `${data.length} result(s) from AniList/MyAnimeList. Fetches fresh metadata + cover on Apply.`;
   resultsEl.style.display = 'flex';
 }
 

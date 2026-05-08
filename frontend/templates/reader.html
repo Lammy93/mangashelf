@@ -134,8 +134,13 @@ let _preloadCache = {};
 function preloadPages(startIdx, count = 4) {
   for (let i = startIdx; i < startIdx + count && i < pages.length; i++) {
     if (!_preloadCache[i]) {
-      _preloadCache[i] = new Image();
-      _preloadCache[i].src = pages[i];
+      const delay = (i - startIdx) * 400;
+      setTimeout(() => {
+        const img = new Image();
+        img.loading = "eager";
+        _preloadCache[i] = img;
+        img.src = pages[i];
+      }, delay);
     }
   }
 }

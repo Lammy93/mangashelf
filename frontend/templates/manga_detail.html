@@ -52,6 +52,20 @@
   .meta-apply-btn{padding:.35rem .7rem;border-radius:5px;border:none;background:var(--accent);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .2s;}
   .meta-apply-btn:hover{background:#c93530;}
   .meta-apply-btn.applied{background:#2a5c2a;color:#7de87d;cursor:default;}
+  .match-section{padding:0 1.25rem 1rem;border-bottom:1px solid var(--border);}
+  .match-section .match-search-row{display:flex;gap:.5rem;margin-bottom:.75rem;}
+  .match-section .match-search-row input{flex:1;}
+  .match-results{display:flex;flex-direction:column;gap:.4rem;max-height:200px;overflow-y:auto;}
+  .match-result{display:flex;align-items:center;gap:.65rem;padding:.5rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;}
+  .match-result img{width:36px;height:54px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--surface);}
+  .match-result-info{flex:1;min-width:0;}
+  .match-result-title{font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .match-result-meta{font-size:.68rem;color:var(--muted);}
+  .match-apply-btn{padding:.3rem .6rem;border-radius:5px;border:none;font-size:.7rem;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all .2s;}
+  .match-apply-btn.primary{background:var(--accent);color:#fff;}
+  .match-apply-btn.primary:hover{background:#c93530;}
+  .match-apply-btn.applied{background:#2a5c2a;color:#7de87d;cursor:default;}
+  .match-apply-btn.loading{background:var(--surface);color:var(--muted);cursor:default;}
 </style>
 </head>
 <body>
@@ -88,6 +102,15 @@
     <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border);">
       <h3 style="font-family:'Dela Gothic One',sans-serif;font-size:1rem;">Edit Details</h3>
       <button onclick="closeEditModal()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;">✕</button>
+    </div>
+    <div class="match-section">
+      <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.4rem;font-weight:600;">Find Match from Online Sources</label>
+      <div class="match-search-row">
+        <input class="field" type="text" id="match-search-input" placeholder="Search title…">
+        <button class="btn btn-ghost" onclick="searchMatch()" style="padding:.5rem .8rem;flex-shrink:0;">Search</button>
+      </div>
+      <div id="match-results" class="match-results" style="display:none;"></div>
+      <div id="match-status" style="font-size:.72rem;color:var(--muted);margin-top:.3rem;"></div>
     </div>
     <div id="edit-form" style="padding:1.25rem;overflow-y:auto;display:flex;flex-direction:column;gap:.75rem;"></div>
     <div style="display:flex;gap:.75rem;padding:1rem 1.25rem;border-top:1px solid var(--border);">
@@ -257,6 +280,9 @@ async function openEditModal() {
     return `<div><label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.2rem;">${f.label}</label>
       <input class="field" type="${f.type}" data-key="${f.key}" value="${val}"></div>`;
   }).join('');
+  document.getElementById('match-search-input').value = data.manga.title;
+  document.getElementById('match-results').style.display = 'none';
+  document.getElementById('match-status').textContent = '';
   document.getElementById('edit-overlay').style.display = 'flex';
 }
 
@@ -287,6 +313,73 @@ async function saveEdit() {
     document.getElementById('edit-status').textContent = 'Save failed';
   }
 }
+
+async function searchMatch() {
+  const q = document.getElementById('match-search-input').value.trim();
+  if (!q) return;
+  const statusEl = document.getElementById('match-status');
+  const resultsEl = document.getElementById('match-results');
+  statusEl.textContent = 'Searching…';
+  resultsEl.style.display = 'none';
+  const res = await fetch(`/api/search-all?q=${encodeURIComponent(q)}`);
+  const data = await res.json();
+  if (!data.length) {
+    statusEl.textContent = 'No matches found. Try a different title.';
+    return;
+  }
+  const sourceLabels = {mangadex: 'MangaDex', anilist: 'AniList', myanimelist: 'MyAnimeList'};
+  const metadataSources = ['anilist', 'myanimelist'];
+  resultsEl.innerHTML = data.map(r => {
+    const label = sourceLabels[r.source] || r.source;
+    const isMeta = metadataSources.includes(r.source);
+    const coverUrl = r.cover || '';
+    return `<div class="match-result">
+      <img src="${coverUrl}" alt="" onerror="this.style.display='none'">
+      <div class="match-result-info">
+        <div class="match-result-title">${r.title}</div>
+        <div class="match-result-meta">${label}${r.chapters ? ` · ${r.chapters}ch` : ''}${r.status ? ' · '+r.status : ''}</div>
+      </div>
+      <button class="match-apply-btn ${isMeta ? 'primary' : ''}" onclick="applyMatch('${r.source}','${r.id.replace(/'/g, "\\'")}','${(r.cover||'').replace(/'/g, "\\'")}','${(r.title||'').replace(/'/g, "\\'")}',this)">${isMeta ? 'Apply (Full)' : 'Apply (Cover)'}</button>
+    </div>`;
+  }).join('');
+  statusEl.textContent = `${data.length} result(s) found. Click Apply to update metadata & cover.`;
+  resultsEl.style.display = 'flex';
+}
+
+async function applyMatch(source, externalId, cover, title, btn) {
+  btn.className = 'match-apply-btn loading';
+  btn.textContent = 'Applying…';
+  const body = {source, external_id: externalId};
+  if (cover) body.cover_url = cover;
+  if (title) body.title = title;
+  try {
+    const res = await fetch(`/api/manga/${MANGA_ID}/rematch`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    const result = await res.json();
+    if (result.ok) {
+      btn.className = 'match-apply-btn applied';
+      btn.textContent = '✓ Applied';
+      document.querySelectorAll('.match-apply-btn:not(.applied)').forEach(b => { b.disabled = true; });
+      document.getElementById('match-status').textContent = '✓ Match applied! Metadata & cover updated.';
+      const updated = await (await fetch(`/api/manga/${MANGA_ID}`)).json();
+      data = updated;
+      renderHero();
+      renderVolumes();
+      renderAllChapters();
+      document.getElementById('match-search-input').value = result.title || title;
+    } else {
+      btn.className = 'match-apply-btn primary';
+      btn.textContent = 'Failed';
+      document.getElementById('match-status').textContent = 'Apply failed.';
+    }
+  } catch (e) {
+    btn.className = 'match-apply-btn primary';
+    btn.textContent = 'Error';
+    document.getElementById('match-status').textContent = 'Network error.';
+  }
+}
+
 load();
 </script>
 </body>

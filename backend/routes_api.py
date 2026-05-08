@@ -16,7 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from .config import CACHE_DIR, SUPPORTED_FORMATS, SUPPORTED_IMAGE_EXTS
-from .db import get_db, get_scan_setting, set_scan_setting, get_all_manga_directories
+from .db import get_db, get_scan_setting, set_scan_setting, get_all_manga_directories, slugify
 from .models import (
     SourceAdd, ReadingProgress, ReadingModeUpdate, MangaDirAdd,
     ScanSettingsUpdate, UserSettingsUpdate, UserCreate, NfoUpdate, DownloadRequest
@@ -875,6 +875,149 @@ async def get_external_metadata(manga_id: str, source: str = "anilist", external
 
     db.close()
     raise HTTPException(400, "Invalid source or missing external_id")
+
+@router.post("/api/manga/{manga_id}/rematch")
+async def rematch_manga(manga_id: str, request: Request):
+    require_admin(request)
+    db = get_db()
+    manga = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+    db.close()
+    if not manga:
+        raise HTTPException(404, "Manga not found")
+    data = await request.json()
+    source = data.get("source")
+    external_id = data.get("external_id")
+    cover_url = data.get("cover_url")
+    title_override = data.get("title")
+
+    if source == "anilist" and external_id:
+        return await _apply_anilist_rematch(manga_id, manga, external_id, cover_url)
+    elif source == "myanimelist" and external_id:
+        return await _apply_mal_rematch(manga_id, manga, external_id, cover_url)
+    else:
+        return await _apply_simple_rematch(manga_id, manga, source, external_id, title_override, cover_url)
+
+
+async def _apply_anilist_rematch(manga_id, manga, external_id, cover_url):
+    query = """
+    query($id: Int) {
+      Media(id: $id, type: MANGA) {
+        id title { romaji english native } coverImage { large medium }
+        status description(asHtml: false) chapters volumes genres
+        startDate { year month day }
+        staff { edges { role node { name { full } } } }
+      }
+    }"""
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://graphql.anilist.co",
+            json={"query": query, "variables": {"id": int(external_id)}}) as resp:
+            result = await resp.json()
+    m = result.get("data", {}).get("Media", {})
+    if not m:
+        raise HTTPException(404, "Match not found on AniList")
+    title = m["title"].get("english") or m["title"].get("romaji") or m["title"].get("native") or ""
+    authors = [e["node"]["name"]["full"] for e in m.get("staff", {}).get("edges", [])
+               if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
+    ext_cover = cover_url or m.get("coverImage", {}).get("large") or m.get("coverImage", {}).get("medium")
+    db = get_db()
+    db.execute(
+        "UPDATE manga SET title=?, slug=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, year=?, cover=?, source=?, source_id=?, updated_at=? WHERE id=?",
+        (title, slugify(title),
+         authors[0] if authors else manga["author"],
+         authors[1] if len(authors) > 1 else manga["artist"],
+         ", ".join(m.get("genres", [])),
+         (m.get("description") or "")[:2000] if m.get("description") else manga["summary"],
+         m.get("status", "").upper() if m.get("status") else manga["status"],
+         m.get("chapters") or manga["total_chapters"],
+         m.get("startDate", {}).get("year") or manga["year"],
+         ext_cover, "anilist", external_id, datetime.now().isoformat(), manga_id)
+    )
+    db.commit()
+    manga_path = Path(manga["path"])
+    if manga_path.is_dir():
+        existing = read_nfo(manga_path)
+        existing.update({
+            "Title": title, "Author": authors[0] if authors else manga["author"],
+            "Artist": authors[1] if len(authors) > 1 else manga["artist"],
+            "Genre": ", ".join(m.get("genres", [])),
+            "Summary": (m.get("description") or "")[:2000] if m.get("description") else manga["summary"],
+            "Status": m.get("status", "").upper() if m.get("status") else manga["status"],
+            "TotalChapters": m.get("chapters") or manga["total_chapters"],
+            "Year": m.get("startDate", {}).get("year") or manga["year"],
+            "Cover": ext_cover, "Source": "anilist", "SourceId": external_id
+        })
+        write_nfo(manga_path, existing)
+        _metadata_cache.invalidate(manga_id)
+    db.close()
+    return {"ok": True, "title": title, "cover": ext_cover, "source": "anilist"}
+
+
+async def _apply_mal_rematch(manga_id, manga, external_id, cover_url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.jikan.moe/v4/manga/{external_id}/full") as resp:
+            result = await resp.json()
+    m = result.get("data", {})
+    if not m:
+        raise HTTPException(404, "Match not found on MyAnimeList")
+    title = m.get("title") or m.get("title_english") or manga["title"]
+    authors = [a["name"] for a in m.get("authors", [])]
+    genres = [g["name"] for g in m.get("genres", [])]
+    ext_cover = cover_url or m.get("images", {}).get("jpg", {}).get("large_image_url") or m.get("images", {}).get("jpg", {}).get("image_url")
+    db = get_db()
+    db.execute(
+        "UPDATE manga SET title=?, slug=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, year=?, publisher=?, cover=?, source=?, source_id=?, updated_at=? WHERE id=?",
+        (title, slugify(title),
+         authors[0] if authors else manga["author"],
+         authors[1] if len(authors) > 1 else manga["artist"],
+         ", ".join(genres),
+         (m.get("synopsis") or "")[:2000] if m.get("synopsis") else manga["summary"],
+         m.get("status", "").upper() if m.get("status") else manga["status"],
+         m.get("chapters") or manga["total_chapters"],
+         m.get("published", {}).get("prop", {}).get("from", {}).get("year") or manga["year"],
+         (m.get("serialization", [{}])[0].get("name") if m.get("serialization") else manga["publisher"]),
+         ext_cover, "myanimelist", external_id, datetime.now().isoformat(), manga_id)
+    )
+    db.commit()
+    manga_path = Path(manga["path"])
+    if manga_path.is_dir():
+        existing = read_nfo(manga_path)
+        existing.update({
+            "Title": title, "Author": authors[0] if authors else manga["author"],
+            "Artist": authors[1] if len(authors) > 1 else manga["artist"],
+            "Genre": ", ".join(genres),
+            "Summary": (m.get("synopsis") or "")[:2000] if m.get("synopsis") else manga["summary"],
+            "Status": m.get("status", "").upper() if m.get("status") else manga["status"],
+            "TotalChapters": m.get("chapters") or manga["total_chapters"],
+            "Year": m.get("published", {}).get("prop", {}).get("from", {}).get("year") or manga["year"],
+            "Publisher": (m.get("serialization", [{}])[0].get("name") if m.get("serialization") else manga["publisher"]),
+            "Cover": ext_cover, "Source": "myanimelist", "SourceId": external_id
+        })
+        write_nfo(manga_path, existing)
+        _metadata_cache.invalidate(manga_id)
+    db.close()
+    return {"ok": True, "title": title, "cover": ext_cover, "source": "myanimelist"}
+
+
+async def _apply_simple_rematch(manga_id, manga, source, external_id, title_override, cover_url):
+    db = get_db()
+    now = datetime.now().isoformat()
+    new_title = title_override or manga["title"]
+    new_cover = cover_url or manga["cover"]
+    db.execute("UPDATE manga SET title=?, slug=?, cover=?, source=?, source_id=?, updated_at=? WHERE id=?",
+               (new_title, slugify(new_title), new_cover, source, external_id, now, manga_id))
+    db.commit()
+    manga_path = Path(manga["path"])
+    if manga_path.is_dir():
+        nfo_updates = {"Source": source, "SourceId": external_id}
+        if title_override: nfo_updates["Title"] = title_override
+        if cover_url: nfo_updates["Cover"] = cover_url
+        existing = read_nfo(manga_path)
+        existing.update(nfo_updates)
+        write_nfo(manga_path, existing)
+    _metadata_cache.invalidate(manga_id)
+    db.close()
+    return {"ok": True, "title": new_title, "cover": new_cover, "source": source}
+
 
 @router.get("/api/manga/{manga_id}/nfo")
 async def get_nfo(manga_id: str):

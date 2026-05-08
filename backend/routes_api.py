@@ -30,8 +30,13 @@ from .utils import (
 )
 from .services import (
     scan_manga_dir, extract_pages, extract_chapter_bg, start_folder_watcher,
-    download_mangadex_chapter, download_status, search_mangadex, search_anilist,
-    search_myanimelist, auto_fetch_metadata, extract_metadata, pre_extract_pages
+    download_mangadex_chapter, download_mangasee_chapter, download_batoto_chapter,
+    download_asurascans_chapter, download_comick_chapter, download_flamescans_chapter,
+    download_status, search_mangadex, search_anilist, search_myanimelist,
+    search_mangasee, search_batoto, search_asurascans, search_comick, search_flamescans,
+    get_mangasee_chapters, get_batoto_chapters, get_asurascans_chapters,
+    get_comick_chapters, get_flamescans_chapters,
+    auto_fetch_metadata, extract_metadata, pre_extract_pages
 )
 
 router = APIRouter()
@@ -690,6 +695,16 @@ async def search_manga(q: str, source: str = "mangadex"):
                     cover = f"https://fanfox.net{cover}"
                 results.append({"id": href, "title": title, "cover": cover, "status": None, "source": "mangafox", "description": ""})
         return results
+    if source == "mangasee":
+        return await search_mangasee(q)
+    if source == "batoto":
+        return await search_batoto(q)
+    if source == "asurascans":
+        return await search_asurascans(q)
+    if source == "comick":
+        return await search_comick(q)
+    if source == "flamescans":
+        return await search_flamescans(q)
     return []
 
 @router.get("/api/search-all")
@@ -702,12 +717,22 @@ async def search_all_sources(q: str):
                 return await search_anilist(q, limit=5)
             if source_type == "myanimelist":
                 return await search_myanimelist(q, limit=5)
+            if source_type == "mangasee":
+                return await search_mangasee(q, limit=5)
+            if source_type == "batoto":
+                return await search_batoto(q, limit=5)
+            if source_type == "asurascans":
+                return await search_asurascans(q, limit=5)
+            if source_type == "comick":
+                return await search_comick(q, limit=5)
+            if source_type == "flamescans":
+                return await search_flamescans(q, limit=5)
             return []
         except Exception as e:
             logger.debug(f"[search-all] Source search failed: {e}")
             return []
     db = get_db()
-    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','anilist','myanimelist')").fetchall()
+    rows = db.execute("SELECT id, type FROM sources WHERE enabled=1 AND type IN ('mangadex','mangasee','batoto','asurascans','comick','flamescans','anilist','myanimelist')").fetchall()
     db.close()
     tasks = [search_source(r["id"], r["type"]) for r in rows]
     all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -784,6 +809,16 @@ async def get_source_chapters(source: str, manga_id: str):
                               "themes": [t["name"] for t in m.get("themes", [])], "serialization": [s["name"] for s in m.get("serialization", [])]}}]
     if source == "anilist":
         return []
+    if source == "mangasee":
+        return await get_mangasee_chapters(manga_id)
+    if source == "batoto":
+        return await get_batoto_chapters(manga_id)
+    if source == "asurascans":
+        return await get_asurascans_chapters(manga_id)
+    if source == "comick":
+        return await get_comick_chapters(manga_id)
+    if source == "flamescans":
+        return await get_flamescans_chapters(manga_id)
     return []
 
 # ── Metadata ────────────────────────────────────────────────────────────
@@ -1095,8 +1130,17 @@ async def find_external_metadata(manga_id: str, source: str = "anilist"):
 @router.post("/api/download")
 async def download_chapter(data: DownloadRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
-    if data.source == "mangadex":
-        background_tasks.add_task(download_mangadex_chapter, data.chapter_id, data.manga_title, data.chapter_num, job_id)
+    tasks_map = {
+        "mangadex": download_mangadex_chapter,
+        "mangasee": download_mangasee_chapter,
+        "batoto": download_batoto_chapter,
+        "asurascans": download_asurascans_chapter,
+        "comick": download_comick_chapter,
+        "flamescans": download_flamescans_chapter,
+    }
+    task = tasks_map.get(data.source)
+    if task:
+        background_tasks.add_task(task, data.chapter_id, data.manga_title, data.chapter_num, job_id)
     return {"job_id": job_id}
 
 @router.get("/api/download/{job_id}")

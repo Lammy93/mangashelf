@@ -117,6 +117,10 @@ def init_db():
         INSERT OR IGNORE INTO sources VALUES ('mangafox','MangaFox','https://fanfox.net','mangafox',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','metadata',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','metadata',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('batoto','Batoto','https://battwo.com','batoto',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('asurascans','Asura Scans','https://www.asurascans.com','asurascans',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('comick','ComicK','https://comick.io','comick',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('flamescans','Flame Scans','https://flamescans.org','flamescans',1,datetime('now'));
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,

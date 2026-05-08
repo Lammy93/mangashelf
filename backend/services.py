@@ -605,3 +605,314 @@ async def download_mangadex_chapter(chapter_id: str, manga_title: str, chapter_n
         scan_manga_dir()
     except Exception as e:
         download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def _download_image_list(img_urls: list, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        download_status[job_id] = {"status": "downloading", "progress": 0, "error": None}
+        out_dir = MANGA_DIR / manga_title
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ch_float = float(chapter_num) if chapter_num else 1.0
+        cbz_path = out_dir / f"Chapter_{ch_float:06.1f}.cbz"
+        imgs = []
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            for i, url in enumerate(img_urls):
+                async with s.get(url) as r:
+                    name = url.rsplit("/", 1)[-1].split("?")[0] or f"page_{i:04d}.jpg"
+                    imgs.append((name, await r.read()))
+                download_status[job_id]["progress"] = int((i + 1) / len(img_urls) * 100)
+        with zipfile.ZipFile(cbz_path, "w") as z:
+            for name, data_ in imgs:
+                z.writestr(name, data_)
+        download_status[job_id] = {"status": "complete", "progress": 100, "error": None}
+        scan_manga_dir()
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def search_mangasee(q: str, limit: int = 20) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://mangasee123.com/_search.php",
+                              json={"search": q},
+                              headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}) as resp:
+                data = await resp.json()
+        results = []
+        for m in data[:limit]:
+            slug = m.get("i", "")
+            title = m.get("s", "")
+            cover = f"https://temp.compsci88.com/cover/{slug}.jpg" if slug else ""
+            results.append({"id": slug, "title": title, "cover": cover,
+                            "status": None, "source": "mangasee", "description": ""})
+        return results
+    except Exception as e:
+        logger.debug(f"[mangasee] Search failed: {e}")
+        return []
+
+async def search_batoto(q: str, limit: int = 20) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://battwo.com/search?word={q}",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select(".search-result-item")[:limit]:
+            link = item.select_one("a")
+            img = item.select_one("img")
+            if link:
+                title = link.get("title", "") or link.text.strip()
+                href = link.get("href", "")
+                cover = img.get("src", "") if img else ""
+                results.append({"id": href, "title": title, "cover": cover,
+                                "status": None, "source": "batoto", "description": ""})
+        return results
+    except Exception as e:
+        logger.debug(f"[batoto] Search failed: {e}")
+        return []
+
+async def search_asurascans(q: str, limit: int = 20) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://www.asurascans.com/?s={q}",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select("div.bsx")[:limit]:
+            link = item.select_one("a")
+            img = item.select_one("img")
+            if link:
+                title = link.get("title", "") or link.text.strip()
+                href = link.get("href", "")
+                cover = img.get("src", "") if img else ""
+                results.append({"id": href, "title": title, "cover": cover,
+                                "status": None, "source": "asurascans", "description": ""})
+        return results
+    except Exception as e:
+        logger.debug(f"[asurascans] Search failed: {e}")
+        return []
+
+async def search_comick(q: str, limit: int = 20) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://api.comick.io/search?q={q}&limit={limit}",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                data = await resp.json()
+        results = []
+        for m in data:
+            slug = m.get("slug", "")
+            title = m.get("title", "")
+            cover = f"https://meo.comick.pics/{m.get('md_covers', [{}])[0].get('b2key', '')}" if m.get("md_covers") else ""
+            results.append({"id": slug, "title": title, "cover": cover,
+                            "status": None, "source": "comick", "description": m.get("desc", "")[:200]})
+        return results
+    except Exception as e:
+        logger.debug(f"[comick] Search failed: {e}")
+        return []
+
+async def search_flamescans(q: str, limit: int = 20) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://flamescans.org/?s={q}",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        results = []
+        for item in soup.select("div.bs")[:limit]:
+            link = item.select_one("a")
+            img = item.select_one("img")
+            if link:
+                title = link.get("title", "") or link.text.strip()
+                href = link.get("href", "")
+                cover = img.get("src", "") if img else ""
+                results.append({"id": href, "title": title, "cover": cover,
+                                "status": None, "source": "flamescans", "description": ""})
+        return results
+    except Exception as e:
+        logger.debug(f"[flamescans] Search failed: {e}")
+        return []
+
+async def get_mangasee_chapters(slug: str) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://mangasee123.com/manga/{slug}",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for opt in soup.select("select#chapterSelect option"):
+            val = opt.get("value", "")
+            txt = opt.text.strip()
+            import re
+            m = re.search(r"Ch\.([\d.]+)", txt)
+            ch_num = m.group(1) if m else txt
+            chapters.append({"id": f"{slug}/{val}", "chapter": ch_num, "title": txt, "pages": 0, "source": "mangasee"})
+        return chapters
+    except Exception as e:
+        logger.debug(f"[mangasee] Chapters failed: {e}")
+        return []
+
+async def get_batoto_chapters(url: str) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for row in soup.select(".chapter-list a") or soup.select("a.chapter-item"):
+            href = row.get("href", "")
+            txt = row.text.strip() or row.select_one("span") and row.select_one("span").text.strip() or ""
+            import re
+            m = re.search(r"([\d.]+)", txt)
+            ch_num = m.group(1) if m else txt
+            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "batoto"})
+        return chapters
+    except Exception as e:
+        logger.debug(f"[batoto] Chapters failed: {e}")
+        return []
+
+async def get_asurascans_chapters(url: str) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for item in soup.select("li.wp-manga-chapter a") or soup.select(".chapter-list a"):
+            href = item.get("href", "")
+            txt = item.text.strip()
+            import re
+            m = re.search(r"Chapter\s*([\d.]+)", txt, re.I)
+            ch_num = m.group(1) if m else txt
+            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "asurascans"})
+        return chapters
+    except Exception as e:
+        logger.debug(f"[asurascans] Chapters failed: {e}")
+        return []
+
+async def get_comick_chapters(slug: str) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://api.comick.io/comic/{slug}/chapter?limit=500",
+                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                data = await resp.json()
+        chapters = []
+        for ch in data.get("chapters", []):
+            ch_num = ch.get("chap", "")
+            hid = ch.get("hid", "")
+            title = ch.get("title", "") or f"Chapter {ch_num}"
+            chapters.append({"id": hid, "chapter": ch_num, "title": title, "pages": ch.get("page_count", 0), "source": "comick"})
+        return chapters
+    except Exception as e:
+        logger.debug(f"[comick] Chapters failed: {e}")
+        return []
+
+async def get_flamescans_chapters(url: str) -> list:
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        chapters = []
+        for item in soup.select("li.wp-manga-chapter a") or soup.select(".chapter-list a"):
+            href = item.get("href", "")
+            txt = item.text.strip()
+            import re
+            m = re.search(r"Chapter\s*([\d.]+)", txt, re.I)
+            ch_num = m.group(1) if m else txt
+            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "flamescans"})
+        return chapters
+    except Exception as e:
+        logger.debug(f"[flamescans] Chapters failed: {e}")
+        return []
+
+# ── Source Downloaders ────────────────────────────────────────────────
+
+async def download_mangasee_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        slug = chapter_id.split("/")[0]
+        ch_part = chapter_id.split("/")[1] if "/" in chapter_id else chapter_num
+        url = f"https://mangasee123.com/read-online/{slug}-chapter-{ch_part}.html"
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            async with s.get(url) as resp:
+                html = await resp.text()
+        import json, re
+        m = re.search(r"vm\.CurChapter\s*=\s*({.*?});", html, re.DOTALL)
+        if not m:
+            raise Exception("Could not find chapter data")
+        ch_data = json.loads(m.group(1))
+        pages = ch_data.get("Pages", [])
+        host = "https://temp.compsci88.com"
+        img_urls = [f"{host}/manga/{slug}/{ch_part}-{str(p).zfill(3)}.png" for p in range(1, len(pages) + 1)]
+        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def download_batoto_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            async with s.get(chapter_id) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        img_urls = []
+        for img in soup.select("img.img-fluid") or soup.select("img.page-img") or soup.select("#page img"):
+            src = img.get("src") or img.get("data-src", "")
+            if src and src.startswith("http"):
+                img_urls.append(src)
+        if not img_urls:
+            import json, re
+            m = re.search(r"pages\s*=\s*(\[.*?\]);", html, re.DOTALL)
+            if m:
+                for p in json.loads(m.group(1)):
+                    if isinstance(p, str) and p.startswith("http"):
+                        img_urls.append(p)
+        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def download_asurascans_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            async with s.get(chapter_id) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        img_urls = []
+        for img in soup.select(".reading-content img") or soup.select("img.wp-manga-chapter-img"):
+            src = img.get("src") or img.get("data-src", "") or img.get("data-lazy-src", "")
+            if src.startswith("http"):
+                img_urls.append(src)
+        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def download_comick_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            async with s.get(f"https://api.comick.io/chapter/{chapter_id}") as resp:
+                data = await resp.json()
+        pages = data.get("chapter", {}).get("images", []) or data.get("images", []) or data.get("page_urls", [])
+        img_urls = []
+        for p in pages:
+            if isinstance(p, str):
+                img_urls.append(f"https://meo.comick.pics/{p}" if not p.startswith("http") else p)
+            elif isinstance(p, dict):
+                url = p.get("url", p.get("src", ""))
+                if url:
+                    img_urls.append(f"https://meo.comick.pics/{url}" if not url.startswith("http") else url)
+        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
+
+async def download_flamescans_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+            async with s.get(chapter_id) as resp:
+                html = await resp.text()
+        soup = BeautifulSoup(html, "html.parser")
+        img_urls = []
+        for img in soup.select(".reading-content img") or soup.select("img.wp-manga-chapter-img"):
+            src = img.get("src") or img.get("data-src", "") or img.get("data-lazy-src", "")
+            if src.startswith("http"):
+                img_urls.append(src)
+        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
+    except Exception as e:
+        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}

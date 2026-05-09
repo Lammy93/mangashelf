@@ -114,6 +114,7 @@ def init_db():
         );
         INSERT OR IGNORE INTO sources VALUES ('mangadex','MangaDex','https://api.mangadex.org','mangadex',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangafox','MangaFox','https://fanfox.net','mangafox',1,datetime('now'));
+        INSERT OR IGNORE INTO sources VALUES ('weebcentral','Weeb Central','https://weebcentral.com','weebcentral',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('anilist','AniList','https://graphql.anilist.co','metadata',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('myanimelist','MyAnimeList','https://api.myanimelist.net','metadata',1,datetime('now'));
         INSERT OR IGNORE INTO sources VALUES ('mangal','mangal','','mangal',1,datetime('now'));

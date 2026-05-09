@@ -28,6 +28,51 @@ from .utils import (
 
 # ── Extraction ──────────────────────────────────────────────────────────
 
+def _cache_key(file_path: Path) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, str(file_path)))
+
+def _cache_dir_for(file_path: Path) -> Path:
+    return CACHE_DIR / _cache_key(file_path)
+
+def extract_first_page(file_path: Path) -> str | None:
+    suffix = file_path.suffix.lower()
+    out_dir = _cache_dir_for(file_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if suffix in ('.cbz', '.zip'):
+            with zipfile.ZipFile(file_path) as z:
+                imgs = sorted([n for n in z.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
+                if not imgs:
+                    return None
+                first = imgs[0]
+                out_path = out_dir / Path(first).name
+                if not out_path.exists():
+                    out_path.write_bytes(z.read(first))
+                return f"/cache/{out_dir.name}/{out_path.name}"
+        elif suffix in ('.cbr', '.rar'):
+            with rarfile.RarFile(file_path) as r:
+                imgs = sorted([n for n in r.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
+                if not imgs:
+                    return None
+                first = imgs[0]
+                out_path = out_dir / Path(first).name
+                if not out_path.exists():
+                    out_path.write_bytes(r.read(first))
+                return f"/cache/{out_dir.name}/{out_path.name}"
+        elif suffix == '.pdf':
+            doc = fitz.open(str(file_path))
+            if len(doc) == 0:
+                doc.close()
+                return None
+            out_path = out_dir / "page_0000.png"
+            if not out_path.exists():
+                doc[0].get_pixmap(dpi=100).save(str(out_path))
+            doc.close()
+            return f"/cache/{out_dir.name}/{out_path.name}"
+    except Exception as e:
+        logger.debug(f"[first-page] Error for {file_path.name}: {e}")
+    return None
+
 def extract_metadata(file_path: Path) -> dict:
     suffix = file_path.suffix.lower()
     meta = {}
@@ -76,13 +121,14 @@ def extract_metadata(file_path: Path) -> dict:
 
 def extract_pages(file_path: Path) -> list:
     suffix = file_path.suffix.lower()
-    out_dir = CACHE_DIR / file_path.stem
+    out_dir = _cache_dir_for(file_path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pages = sorted([f for f in out_dir.iterdir() if f.suffix in SUPPORTED_IMAGE_EXTS])
     if pages:
-        return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+        return [f"/cache/{out_dir.name}/{p.name}" for p in pages]
 
+    ck = out_dir.name
     if suffix in ('.cbz', '.zip'):
         with zipfile.ZipFile(file_path) as z:
             imgs = sorted([n for n in z.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
@@ -104,14 +150,13 @@ def extract_pages(file_path: Path) -> list:
             logger.warning(f"[pages] PDF error for {file_path.name}: {e}")
 
     pages = sorted([f for f in out_dir.iterdir() if f.suffix in SUPPORTED_IMAGE_EXTS])
-    return [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+    return [f"/cache/{ck}/{p.name}" for p in pages]
 
 def extract_chapter_bg(path: str):
-    stem = Path(path).stem
+    file_path = Path(path)
+    out_dir = _cache_dir_for(file_path)
     try:
-        file_path = Path(path)
         suffix = file_path.suffix.lower()
-        out_dir = CACHE_DIR / stem
         out_dir.mkdir(parents=True, exist_ok=True)
         if suffix in ('.cbz', '.zip'):
             with zipfile.ZipFile(file_path) as z:
@@ -133,7 +178,7 @@ def extract_chapter_bg(path: str):
                     doc[i].get_pixmap(dpi=150).save(str(cached))
             doc.close()
     except Exception as e:
-        logger.warning(f"[bg-extract] Error extracting {stem}: {e}")
+        logger.warning(f"[bg-extract] Error extracting {file_path.name}: {e}")
 
 
 # ── ComicInfo.xml ────────────────────────────────────────────────────────
@@ -377,7 +422,7 @@ def scan_manga_dir():
         for mid in updated_manga_ids:
             _metadata_cache.invalidate(mid)
 
-        # Parallel cover generation
+        # Parallel cover generation (extracts only first page, not entire archive)
         if cover_tasks:
             def _gen_cover(mid):
                 try:
@@ -386,9 +431,9 @@ def scan_manga_dir():
                     if ch:
                         p = Path(ch["path"])
                         if p.exists():
-                            pages = extract_pages(p)
-                            if pages:
-                                d.execute("UPDATE manga SET cover=? WHERE id=?", (pages[0], mid))
+                            cover_url = extract_first_page(p)
+                            if cover_url:
+                                d.execute("UPDATE manga SET cover=? WHERE id=?", (cover_url, mid))
                                 d.commit()
                     d.close()
                 except Exception as e:
@@ -400,8 +445,14 @@ def scan_manga_dir():
         for nm in new_manga_for_meta:
             bg_submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
 
-        for nm in new_manga_list:
-            bg_submit(pre_extract_pages, nm["id"])
+        if new_manga_list:
+            def _extract_one(nm):
+                try:
+                    pre_extract_pages(nm["id"])
+                except Exception as e:
+                    logger.warning(f"[pre-extract] Failed for {nm.get('title','')}: {e}")
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(_extract_one, new_manga_list))
 
         set_scan_progress(
             message=f"Scan complete. Found {new_count} new series." if new_count else "Scan complete. No new series.",

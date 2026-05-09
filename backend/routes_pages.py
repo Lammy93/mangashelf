@@ -165,6 +165,17 @@ async def reader(request: Request, manga_id: str, chapter_id: str, slug: str = N
     manga_slug = _get_manga_slug(resolved)
     return templates.TemplateResponse("reader.html", {"request": request, "manga_id": resolved, "slug": manga_slug, "chapter_id": ch_resolved, "user": user})
 
+@router.get("/read-source/{source}/{manga_id}/{chapter_id}")
+async def source_reader(request: Request, source: str, manga_id: str, chapter_id: str, title: str = ""):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse("reader.html", {
+        "request": request, "manga_id": manga_id, "slug": "",
+        "chapter_id": chapter_id, "user": user, "source": source,
+        "manga_title": title
+    })
+
 @router.get("/sources")
 async def sources_page(request: Request):
     user = await get_current_user(request)

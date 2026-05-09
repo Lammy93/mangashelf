@@ -30,18 +30,27 @@ class MangaDexConnector(SourceConnector):
         return results
 
     async def get_chapters(self, manga_id: str) -> list[dict]:
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.mangadex.org/manga/{manga_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100"
-            async with session.get(url) as resp:
-                data = await resp.json()
         chapters = []
-        for ch in data.get("data", []):
-            attr = ch["attributes"]
-            chapters.append({
-                "id": ch["id"], "chapter": attr.get("chapter"),
-                "title": attr.get("title") or f"Chapter {attr.get('chapter','')}",
-                "pages": attr.get("pages", 0), "source": "mangadex"
-            })
+        offset = 0
+        limit = 500
+        while True:
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.mangadex.org/manga/{manga_id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit={limit}&offset={offset}"
+                async with session.get(url) as resp:
+                    data = await resp.json()
+            batch = data.get("data", [])
+            if not batch:
+                break
+            for ch in batch:
+                attr = ch["attributes"]
+                chapters.append({
+                    "id": ch["id"], "chapter": attr.get("chapter"),
+                    "title": attr.get("title") or f"Chapter {attr.get('chapter','')}",
+                    "pages": attr.get("pages", 0), "source": "mangadex"
+                })
+            offset += limit
+            if len(batch) < limit:
+                break
         return chapters
 
     async def get_page_urls(self, manga_id: str | None, chapter_id: str) -> list[str]:

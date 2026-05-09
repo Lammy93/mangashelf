@@ -26,7 +26,8 @@ from .nfo import read_nfo, write_nfo
 from .cache import _metadata_cache
 from .utils import (
     logger, hash_password, verify_password, generate_id, is_manga_processing,
-    get_scan_progress, set_scan_progress
+    get_scan_progress, set_scan_progress,
+    _extracting_chapters, _extracting_chapters_lock
 )
 from .services import (
     scan_manga_dir, extract_pages, extract_chapter_bg, start_folder_watcher,
@@ -492,11 +493,11 @@ async def get_pages(chapter_id: str):
     if not ch:
         raise HTTPException(404, "Chapter not found")
     file_path = Path(ch["path"])
-    out_dir = CACHE_DIR / file_path.stem
+    out_dir = CACHE_DIR / chapter_id
     if out_dir.exists():
         pages = sorted([f for f in out_dir.iterdir() if f.suffix in SUPPORTED_IMAGE_EXTS])
         if pages:
-            urls = [f"/cache/{file_path.stem}/{p.name}" for p in pages]
+            urls = [f"/cache/{chapter_id}/{p.name}" for p in pages]
             db.execute("UPDATE chapters SET pages=? WHERE id=?", (len(pages), chapter_id))
             db.commit(); db.close()
             return {"pages": urls, "total": len(pages)}
@@ -518,11 +519,9 @@ async def get_pages(chapter_id: str):
     db.execute("UPDATE chapters SET pages=? WHERE id=?", (total, chapter_id))
     db.commit(); db.close()
     urls = [f"/api/chapter/{chapter_id}/page/{i}" for i in range(total)]
-    from .utils import _extracting_chapters, _extracting_chapters_lock
-    stem = file_path.stem
     with _extracting_chapters_lock:
-        if stem not in _extracting_chapters:
-            _extracting_chapters.add(stem)
+        if chapter_id not in _extracting_chapters:
+            _extracting_chapters.add(chapter_id)
             threading.Thread(target=extract_chapter_bg, args=(str(file_path),), daemon=True).start()
     return {"pages": urls, "total": total}
 
@@ -533,7 +532,7 @@ async def get_chapter_page(chapter_id: str, page_num: int):
     if not ch:
         raise HTTPException(404, "Chapter not found")
     file_path = Path(ch["path"])
-    out_dir = CACHE_DIR / file_path.stem
+    out_dir = CACHE_DIR / chapter_id
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = file_path.suffix.lower()
     ok = False
@@ -581,11 +580,9 @@ async def get_chapter_page(chapter_id: str, page_num: int):
         raise HTTPException(500, "Failed to extract page")
     finally:
         if ok:
-            from .utils import _extracting_chapters, _extracting_chapters_lock
-            stem = file_path.stem
             with _extracting_chapters_lock:
-                if stem not in _extracting_chapters:
-                    _extracting_chapters.add(stem)
+                if chapter_id not in _extracting_chapters:
+                    _extracting_chapters.add(chapter_id)
                     threading.Thread(target=extract_chapter_bg, args=(str(file_path),), daemon=True).start()
         db.close()
     raise HTTPException(400, "Unsupported file format")
@@ -1139,6 +1136,40 @@ async def get_jobs(limit: int = 50):
 async def cancel_job_route(job_id: str):
     cancel_job(job_id)
     return {"ok": True}
+
+# ── Source Proxy (read connector chapters without local files) ──────────
+
+@router.get("/api/source/{source}/chapter/{chapter_id}/pages")
+async def get_source_pages(source: str, chapter_id: str):
+    from .connectors import get_connector
+    conn = get_connector(source)
+    if not conn:
+        raise HTTPException(400, f"Unknown source: {source}")
+    page_urls = await conn.get_page_urls(None, chapter_id)
+    if not page_urls:
+        raise HTTPException(404, "No pages found")
+    total = len(page_urls)
+    urls = [f"/api/source/{source}/chapter/{chapter_id}/page/{i}" for i in range(total)]
+    return {"pages": urls, "total": total}
+
+@router.get("/api/source/{source}/chapter/{chapter_id}/page/{page_num}")
+async def get_source_page(source: str, chapter_id: str, page_num: int):
+    from .connectors import get_connector
+    conn = get_connector(source)
+    if not conn:
+        raise HTTPException(400, f"Unknown source: {source}")
+    page_urls = await conn.get_page_urls(None, chapter_id)
+    if not page_urls or page_num < 0 or page_num >= len(page_urls):
+        raise HTTPException(404, "Page not found")
+    import aiohttp
+    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
+        async with s.get(page_urls[page_num]) as resp:
+            if resp.status != 200:
+                raise HTTPException(502, f"Source returned {resp.status}")
+            img_bytes = await resp.read()
+            content_type = resp.headers.get("content-type", "image/jpeg")
+    from fastapi.responses import Response
+    return Response(content=img_bytes, media_type=content_type)
 
 # ── Cache ───────────────────────────────────────────────────────────────
 

@@ -211,13 +211,17 @@ async function openManga(idx, sourceGroup) {
     }
     document.getElementById('chapter-count').textContent = `${chapters.length} chapters`;
     window._currentChapters = chapters;
+    const srcType = currentResult.source;
     document.getElementById('chapter-list').innerHTML = chapters.map(c=>`
       <div class="chapter-item" id="ch-${c.id}">
         <div class="ch-item-meta">
           <div class="ch-name">Chapter ${c.chapter} ${c.title && c.title !== `Chapter ${c.chapter}` ? '— '+c.title : ''}</div>
           <div class="ch-pages">${c.pages ? c.pages+' pages' : ''}</div>
         </div>
-        <button class="dl-btn" onclick="downloadChapter('${c.id}','${c.chapter}')">↓ Download</button>
+        <div style="display:flex;gap:.4rem;flex-shrink:0;">
+          <button class="dl-btn" onclick="readChapter('${srcType}','${currentResult.id}','${c.id}','${c.chapter}')">📖 Read</button>
+          <button class="dl-btn" onclick="downloadChapter('${c.id}','${c.chapter}')">↓ Download</button>
+        </div>
       </div>`).join('');
   } else {
     document.getElementById('chapter-section').style.display = 'none';
@@ -248,6 +252,11 @@ async function openManga(idx, sourceGroup) {
       document.getElementById('metadata-body').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);">No metadata available.</div>';
     }
   }
+}
+
+function readChapter(source, mangaId, chId, chNum) {
+  const title = encodeURIComponent(currentResult.title);
+  window.open(`/read-source/${source}/${mangaId}/${chId}?title=${title}`, '_blank');
 }
 
 async function downloadChapter(chId, chNum) {

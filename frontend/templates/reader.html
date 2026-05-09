@@ -100,7 +100,11 @@
 </div>
 
 <div id="toolbar">
+  {% if source %}
+  <a href="/search" class="nav-home">← Discover</a>
+  {% else %}
   <a href="/manga/{{ slug }}" class="nav-home">← Detail</a>
+  {% endif %}
   <a href="/" class="nav-home">← Library</a>
   <select id="chapter-select" onchange="loadChapter(this.value)"></select>
   <div class="spacer"></div>
@@ -122,6 +126,9 @@
 <script>
 const MANGA_ID = "{{ manga_id }}";
 const CHAPTER_ID = "{{ chapter_id }}";
+const IS_SOURCE = {% if source %}true{% else %}false{% endif %};
+const SOURCE = "{{ source|default('') }}";
+const MANGA_TITLE = "{{ manga_title|default('') }}";
 
 let pages = [];
 let currentPage = 0;
@@ -132,6 +139,7 @@ let toolbarVisible = true;
 let saveTimer = null;
 let _preloadCache = {};
 let continuousEnabled = true;
+let _downloadTriggered = {};
 
 function preloadPages(startIdx, count = 4) {
   for (let i = startIdx; i < startIdx + count && i < pages.length; i++) {
@@ -148,6 +156,19 @@ function preloadPages(startIdx, count = 4) {
 }
 
 async function init() {
+  if (IS_SOURCE) {
+    const res = await fetch(`/api/manga-source/${SOURCE}/${MANGA_ID}/chapters`);
+    allChapters = await res.json();
+    const sel = document.getElementById('chapter-select');
+    sel.innerHTML = allChapters.map(c =>
+      `<option value="${c.id}" ${c.id === currentChapterId ? 'selected' : ''}>
+        Ch.${c.chapter} ${c.title !== `Chapter ${c.chapter}` ? '– ' + c.title : ''}
+      </option>`).join('');
+    setMode('single', false);
+    await loadChapter(currentChapterId);
+    triggerDownload(currentChapterId, allChapters.find(c => c.id === currentChapterId));
+    return;
+  }
   const res = await fetch(`/api/manga/${MANGA_ID}`);
   const data = await res.json();
   allChapters = data.chapters;
@@ -165,7 +186,10 @@ async function loadChapter(chapterId, goToLastPage = false) {
   document.getElementById('loading').classList.remove('hidden');
   currentChapterId = chapterId;
   _preloadCache = {};
-  const res = await fetch(`/api/chapter/${chapterId}/pages`);
+  const url = IS_SOURCE
+    ? `/api/source/${SOURCE}/chapter/${chapterId}/pages`
+    : `/api/chapter/${chapterId}/pages`;
+  const res = await fetch(url);
   const data = await res.json();
   pages = data.pages;
   currentPage = 0;
@@ -184,6 +208,21 @@ async function loadChapter(chapterId, goToLastPage = false) {
   }
   preloadPages(currentPage + 1, 4);
   preloadNextChapter();
+  if (IS_SOURCE) {
+    const ch = allChapters.find(c => c.id === chapterId);
+    if (ch) triggerDownload(chapterId, ch);
+  }
+}
+
+function triggerDownload(chapterId, ch) {
+  if (_downloadTriggered[chapterId]) return;
+  _downloadTriggered[chapterId] = true;
+  const title = MANGA_TITLE || document.querySelector('.nav-home')?.textContent?.trim() || 'Manga';
+  const chNum = ch?.chapter || '1';
+  fetch('/api/download', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: SOURCE, manga_title: title, chapter_num: String(chNum), chapter_id: chapterId})
+  }).catch(() => {});
 }
 
 function renderPages() {
@@ -290,7 +329,10 @@ function preloadNextChapter() {
   const idx = allChapters.findIndex(c => c.id === currentChapterId);
   if (idx < allChapters.length - 1) {
     const next = allChapters[idx + 1];
-    fetch(`/api/chapter/${next.id}/pages`).then(r => r.json()).then(data => {
+    const url = IS_SOURCE
+      ? `/api/source/${SOURCE}/chapter/${next.id}/pages`
+      : `/api/chapter/${next.id}/pages`;
+    fetch(url).then(r => r.json()).then(data => {
       if (data.pages && data.pages.length > 0) {
         for (let i = 0; i < Math.min(2, data.pages.length); i++) {
           const img = new Image();
@@ -342,6 +384,7 @@ function updateProgress() {
 }
 
 function scheduleSave() {
+  if (IS_SOURCE) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     fetch('/api/progress', {

@@ -17,7 +17,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from .config import MANGA_DIR, CACHE_DIR, SUPPORTED_FORMATS, SUPPORTED_IMAGE_EXTS
-from .db import get_db, get_scan_setting, set_scan_setting, get_manga_directories, slugify
+from .db import db_conn, get_scan_setting, set_scan_setting, get_manga_directories, slugify
 from .nfo import read_nfo, write_nfo
 from .cache import _metadata_cache
 from .parser import parse_filename
@@ -34,6 +34,24 @@ def _cache_key(file_path: Path) -> str:
 def _cache_dir_for(file_path: Path) -> Path:
     return CACHE_DIR / _cache_key(file_path)
 
+def _save_cover_thumb(out_dir: Path, img_bytes: bytes) -> str | None:
+    """Save a resized JPEG thumbnail of the cover image."""
+    thumb = out_dir / "cover.jpg"
+    if thumb.exists():
+        return f"/cache/{out_dir.name}/cover.jpg"
+    try:
+        pix = fitz.Pixmap(img_bytes)
+        max_w = 400
+        if pix.width > max_w:
+            factor = max(2, pix.width // max_w)
+            pix.shrink(factor)
+        pix.save(str(thumb))
+        return f"/cache/{out_dir.name}/cover.jpg"
+    except Exception:
+        fallback = out_dir / "page_0000.png"
+        fallback.write_bytes(img_bytes)
+        return f"/cache/{out_dir.name}/page_0000.png"
+
 def extract_first_page(file_path: Path) -> str | None:
     suffix = file_path.suffix.lower()
     out_dir = _cache_dir_for(file_path)
@@ -45,30 +63,30 @@ def extract_first_page(file_path: Path) -> str | None:
                 if not imgs:
                     return None
                 first = imgs[0]
-                out_path = out_dir / Path(first).name
-                if not out_path.exists():
-                    out_path.write_bytes(z.read(first))
-                return f"/cache/{out_dir.name}/{out_path.name}"
+                img_bytes = z.read(first)
+                return _save_cover_thumb(out_dir, img_bytes)
         elif suffix in ('.cbr', '.rar'):
             with rarfile.RarFile(file_path) as r:
                 imgs = sorted([n for n in r.namelist() if Path(n).suffix.lower() in SUPPORTED_IMAGE_EXTS])
                 if not imgs:
                     return None
                 first = imgs[0]
-                out_path = out_dir / Path(first).name
-                if not out_path.exists():
-                    out_path.write_bytes(r.read(first))
-                return f"/cache/{out_dir.name}/{out_path.name}"
+                img_bytes = r.read(first)
+                return _save_cover_thumb(out_dir, img_bytes)
         elif suffix == '.pdf':
             doc = fitz.open(str(file_path))
             if len(doc) == 0:
                 doc.close()
                 return None
-            out_path = out_dir / "page_0000.png"
-            if not out_path.exists():
-                doc[0].get_pixmap(dpi=100).save(str(out_path))
+            pix = doc[0].get_pixmap(dpi=100)
+            max_w = 400
+            if pix.width > max_w:
+                factor = max(2, pix.width // max_w)
+                pix.shrink(factor)
+            thumb = out_dir / "cover.jpg"
+            pix.save(str(thumb))
             doc.close()
-            return f"/cache/{out_dir.name}/{out_path.name}"
+            return f"/cache/{out_dir.name}/cover.jpg"
     except Exception as e:
         logger.debug(f"[first-page] Error for {file_path.name}: {e}")
     return None
@@ -264,7 +282,6 @@ def scan_manga_dir():
     try:
         directories = get_manga_directories()
         set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
-        db = get_db()
         now_iso = datetime.now().isoformat()
         all_files = []
         for dir_conf in directories:
@@ -304,116 +321,116 @@ def scan_manga_dir():
         cover_tasks = []
         updated_manga_ids = set()
 
-        for group_key, series_data in series_map.items():
-            folder = series_data["folder"]
-            files = series_data["files"]
-            parsed_series = series_data["parsed_series"]
+        with db_conn() as db:
+            for group_key, series_data in series_map.items():
+                folder = series_data["folder"]
+                files = series_data["files"]
+                parsed_series = series_data["parsed_series"]
 
-            if folder and folder.is_dir():
-                manga_path = str(folder)
-            else:
-                manga_path = str(files[0]["path"])
+                if folder and folder.is_dir():
+                    manga_path = str(folder)
+                else:
+                    manga_path = str(files[0]["path"])
 
-            manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, manga_path))
-            existing_manga = db.execute("SELECT id, title FROM manga WHERE id=?", (manga_id,)).fetchone()
-            is_new = existing_manga is None
+                manga_id = str(uuid.uuid5(uuid.NAMESPACE_URL, manga_path))
+                existing_manga = db.execute("SELECT id, title FROM manga WHERE id=?", (manga_id,)).fetchone()
+                is_new = existing_manga is None
 
-            if is_new:
-                nfo = read_nfo(folder) if folder and folder.is_dir() else {}
-                meta = nfo if (nfo and nfo.get("title")) else {}
-                title = meta.get("title") or parsed_series
-                db.execute("""
-                    INSERT OR IGNORE INTO manga (
-                        id, title, slug, path, cover, total_chapters,
-                        last_read_chapter, last_read_page, reading_mode,
-                        source, source_id, added_at, updated_at, status,
-                        author, artist, genre, summary, publisher, year
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    manga_id, title, slugify(title), manga_path,
-                    meta.get("cover"), meta.get("total_chapters") or len(files),
-                    0, 0, "single",
-                    meta.get("source"), meta.get("source_id"),
-                    now_iso, now_iso,
-                    meta.get("status") or "local",
-                    meta.get("author") or meta.get("writer"),
-                    meta.get("artist") or meta.get("penciller"),
-                    meta.get("genre"), meta.get("summary"),
-                    meta.get("publisher"), meta.get("year"),
-                ))
-                if not nfo or not nfo.get("title") or not nfo.get("author"):
-                    new_manga_for_meta.append({"id": manga_id, "path": manga_path, "title": title})
-                new_manga_list.append({"id": manga_id, "path": manga_path, "title": title})
-                cover_tasks.append({"id": manga_id, "path": manga_path})
-                updated_manga_ids.add(manga_id)
-            else:
-                title = existing_manga["title"]
+                if is_new:
+                    nfo = read_nfo(folder) if folder and folder.is_dir() else {}
+                    meta = nfo if (nfo and nfo.get("title")) else {}
+                    title = meta.get("title") or parsed_series
+                    db.execute("""
+                        INSERT OR IGNORE INTO manga (
+                            id, title, slug, path, cover, total_chapters,
+                            last_read_chapter, last_read_page, reading_mode,
+                            source, source_id, added_at, updated_at, status,
+                            author, artist, genre, summary, publisher, year
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        manga_id, title, slugify(title), manga_path,
+                        meta.get("cover"), meta.get("total_chapters") or len(files),
+                        0, 0, "single",
+                        meta.get("source"), meta.get("source_id"),
+                        now_iso, now_iso,
+                        meta.get("status") or "local",
+                        meta.get("author") or meta.get("writer"),
+                        meta.get("artist") or meta.get("penciller"),
+                        meta.get("genre"), meta.get("summary"),
+                        meta.get("publisher"), meta.get("year"),
+                    ))
+                    if not nfo or not nfo.get("title") or not nfo.get("author"):
+                        new_manga_for_meta.append({"id": manga_id, "path": manga_path, "title": title})
+                    new_manga_list.append({"id": manga_id, "path": manga_path, "title": title})
+                    cover_tasks.append({"id": manga_id, "path": manga_path})
+                    updated_manga_ids.add(manga_id)
+                else:
+                    title = existing_manga["title"]
 
-            for f in files:
-                file_path = f["path"]
-                parsed = f["parsed"]
+                for f in files:
+                    file_path = f["path"]
+                    parsed = f["parsed"]
 
-                stat = file_path.stat()
-                mtime = stat.st_mtime
-                fsize = stat.st_size
+                    stat = file_path.stat()
+                    mtime = stat.st_mtime
+                    fsize = stat.st_size
 
-                tracked = db.execute(
-                    "SELECT last_modified FROM file_scan_tracking WHERE file_path=?",
-                    (str(file_path),),
-                ).fetchone()
+                    tracked = db.execute(
+                        "SELECT last_modified FROM file_scan_tracking WHERE file_path=?",
+                        (str(file_path),),
+                    ).fetchone()
 
-                file_changed = tracked is None or tracked["last_modified"] != mtime
+                    file_changed = tracked is None or tracked["last_modified"] != mtime
 
-                db.execute(
-                    "INSERT OR REPLACE INTO file_scan_tracking (file_path, last_modified, file_size, last_scanned) VALUES (?, ?, ?, ?)",
-                    (str(file_path), mtime, fsize, now_iso),
+                    db.execute(
+                        "INSERT OR REPLACE INTO file_scan_tracking (file_path, last_modified, file_size, last_scanned) VALUES (?, ?, ?, ?)",
+                        (str(file_path), mtime, fsize, now_iso),
+                    )
+
+                    if not file_changed and not is_new:
+                        continue
+
+                    ch_num = parsed.chapter if parsed.chapter is not None else 1.0
+                    ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(file_path)))
+                    ch_slug = slugify(file_path.stem)
+
+                    volume_id = None
+                    if parsed.volume is not None and folder and folder.is_dir():
+                        vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}_v{parsed.volume}"))
+                        existing_vol = db.execute("SELECT id FROM volumes WHERE id=?", (vol_id,)).fetchone()
+                        if not existing_vol:
+                            db.execute(
+                                "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path) VALUES (?, ?, ?, ?, ?)",
+                                (vol_id, manga_id, parsed.volume, f"Volume {parsed.volume}", str(folder)),
+                            )
+                        volume_id = vol_id
+
+                    existing_ch = db.execute("SELECT id FROM chapters WHERE id=?", (ch_id,)).fetchone()
+                    if existing_ch:
+                        db.execute(
+                            "UPDATE chapters SET chapter_number=?, title=?, path=?, volume_id=? WHERE id=?",
+                            (ch_num, file_path.stem, str(file_path), volume_id, ch_id),
+                        )
+                    else:
+                        db.execute(
+                            "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (ch_id, manga_id, ch_num, file_path.stem, str(file_path), 0, 0, 0, None, 1, volume_id, ch_slug),
+                        )
+
+                    updated_manga_ids.add(manga_id)
+
+                set_scan_progress(
+                    current=len(new_manga_list),
+                    message=f"Scanned {title} ({len(files)} files)",
                 )
 
-                if not file_changed and not is_new:
-                    continue
+            for mid in updated_manga_ids:
+                db.execute(
+                    "UPDATE manga SET total_chapters=(SELECT COUNT(*) FROM chapters WHERE manga_id=?), updated_at=? WHERE id=?",
+                    (mid, now_iso, mid)
+                )
 
-                ch_num = parsed.chapter if parsed.chapter is not None else 1.0
-                ch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(file_path)))
-                ch_slug = slugify(file_path.stem)
-
-                volume_id = None
-                if parsed.volume is not None and folder and folder.is_dir():
-                    vol_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{manga_id}_v{parsed.volume}"))
-                    existing_vol = db.execute("SELECT id FROM volumes WHERE id=?", (vol_id,)).fetchone()
-                    if not existing_vol:
-                        db.execute(
-                            "INSERT OR IGNORE INTO volumes (id, manga_id, volume_number, title, path) VALUES (?, ?, ?, ?, ?)",
-                            (vol_id, manga_id, parsed.volume, f"Volume {parsed.volume}", str(folder)),
-                        )
-                    volume_id = vol_id
-
-                existing_ch = db.execute("SELECT id FROM chapters WHERE id=?", (ch_id,)).fetchone()
-                if existing_ch:
-                    db.execute(
-                        "UPDATE chapters SET chapter_number=?, title=?, path=?, volume_id=? WHERE id=?",
-                        (ch_num, file_path.stem, str(file_path), volume_id, ch_id),
-                    )
-                else:
-                    db.execute(
-                        "INSERT OR IGNORE INTO chapters (id, manga_id, chapter_number, title, path, pages, read_page, is_read, source_url, downloaded, volume_id, slug) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (ch_id, manga_id, ch_num, file_path.stem, str(file_path), 0, 0, 0, None, 1, volume_id, ch_slug),
-                    )
-
-                updated_manga_ids.add(manga_id)
-
-            set_scan_progress(
-                current=len(new_manga_list),
-                message=f"Scanned {title} ({len(files)} files)",
-            )
-
-        for mid in updated_manga_ids:
-            db.execute(
-                "UPDATE manga SET total_chapters=(SELECT COUNT(*) FROM chapters WHERE manga_id=?), updated_at=? WHERE id=?",
-                (mid, now_iso, mid)
-            )
-
-        db.commit()
-        db.close()
+            db.commit()
 
         new_count = len(new_manga_list)
         set_scan_progress(message=f"Scan complete. Found {new_count} new series. Post-processing...")
@@ -426,16 +443,15 @@ def scan_manga_dir():
         if cover_tasks:
             def _gen_cover(mid):
                 try:
-                    d = get_db()
-                    ch = d.execute("SELECT path FROM chapters WHERE manga_id=? ORDER BY chapter_number LIMIT 1", (mid,)).fetchone()
-                    if ch:
-                        p = Path(ch["path"])
-                        if p.exists():
-                            cover_url = extract_first_page(p)
-                            if cover_url:
-                                d.execute("UPDATE manga SET cover=? WHERE id=?", (cover_url, mid))
-                                d.commit()
-                    d.close()
+                    with db_conn() as d:
+                        ch = d.execute("SELECT path FROM chapters WHERE manga_id=? ORDER BY chapter_number LIMIT 1", (mid,)).fetchone()
+                        if ch:
+                            p = Path(ch["path"])
+                            if p.exists():
+                                cover_url = extract_first_page(p)
+                                if cover_url:
+                                    d.execute("UPDATE manga SET cover=? WHERE id=?", (cover_url, mid))
+                                    d.commit()
                 except Exception as e:
                     logger.warning(f"[cover] Failed for {mid}: {e}")
 
@@ -468,9 +484,8 @@ def scan_manga_dir():
 def pre_extract_pages(manga_id: str):
     mark_manga_processing(manga_id, True)
     try:
-        db = get_db()
-        chapters = db.execute("SELECT id, path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
-        db.close()
+        with db_conn() as db:
+            chapters = db.execute("SELECT id, path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
         for ch in chapters:
             p = Path(ch["path"])
             if p.exists():
@@ -582,9 +597,8 @@ def start_followed_updates_checker():
         while True:
             interval = int(get_scan_setting("scan_interval") or 300)
             time.sleep(interval)
-            db = get_db()
-            followed = db.execute("SELECT * FROM followed_manga WHERE user_id IS NOT NULL").fetchall()
-            db.close()
+            with db_conn() as db:
+                followed = db.execute("SELECT * FROM followed_manga WHERE user_id IS NOT NULL").fetchall()
             for item in followed:
                 source = item["source"]
                 source_id = item["source_id"]
@@ -598,26 +612,9 @@ def start_followed_updates_checker():
                             return len(data.get("data", [])) if data.get("data") else item["last_chapter_count"]
                         new_count = asyncio.run(_check_md())
                         if new_count > item["last_chapter_count"]:
-                            db_up = get_db()
-                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
-                            db_up.commit()
-                            db_up.close()
-                    elif source == "mangakakalot":
-                        async def _check_mkk():
-                            url = f"https://mangakakalot.com{source_id}" if not source_id.startswith("http") else source_id
-                            headers = {"User-Agent": "Mozilla/5.0"}
-                            async with aiohttp.ClientSession() as session:
-                                async with session.get(url, headers=headers) as resp:
-                                    html = await resp.text()
-                            soup = BeautifulSoup(html, "html.parser")
-                            chapters = soup.select("ul.row-content-chapter li")
-                            return len(chapters)
-                        new_count = asyncio.run(_check_mkk())
-                        if new_count > item["last_chapter_count"]:
-                            db_up = get_db()
-                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
-                            db_up.commit()
-                            db_up.close()
+                            with db_conn() as db_up:
+                                db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                                db_up.commit()
                     elif source == "mangafox":
                         async def _check_mf():
                             url = f"https://fanfox.net{source_id}" if not source_id.startswith("http") else source_id
@@ -630,10 +627,9 @@ def start_followed_updates_checker():
                             return len(chapters)
                         new_count = asyncio.run(_check_mf())
                         if new_count > item["last_chapter_count"]:
-                            db_up = get_db()
-                            db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
-                            db_up.commit()
-                            db_up.close()
+                            with db_conn() as db_up:
+                                db_up.execute("UPDATE followed_manga SET last_chapter_count=? WHERE id=?", (new_count, item["id"]))
+                                db_up.commit()
                 except Exception as e:
                     logger.debug(f"[followed] Update check failed for {item.get('title','')}: {e}")
     threading.Thread(target=check_loop, daemon=True).start()
@@ -644,11 +640,10 @@ def start_auto_downloader():
         while True:
             try:
                 time.sleep(3600)
-                db = get_db()
-                rows = db.execute(
-                    "SELECT id, title, source, source_id FROM manga WHERE auto_download=1 AND source IS NOT NULL AND source_id IS NOT NULL"
-                ).fetchall()
-                db.close()
+                with db_conn() as db:
+                    rows = db.execute(
+                        "SELECT id, title, source, source_id FROM manga WHERE auto_download=1 AND source IS NOT NULL AND source_id IS NOT NULL"
+                    ).fetchall()
                 for row in rows:
                     try:
                         _check_and_download_new_chapters(row)
@@ -670,10 +665,10 @@ def _check_and_download_new_chapters(manga: dict):
                     data = await resp.json()
             return data.get("data", [])
         chapters = asyncio.run(_fetch())
-        db = get_db()
-        existing = {r["chapter_number"] for r in db.execute(
-            "SELECT chapter_number FROM chapters WHERE manga_id=?", (manga["id"],)
-        ).fetchall()}
+        with db_conn() as db:
+            existing = {r["chapter_number"] for r in db.execute(
+                "SELECT chapter_number FROM chapters WHERE manga_id=?", (manga["id"],)
+            ).fetchall()}
         from .job_queue import create_job
         for ch in chapters:
             ch_num = ch["attributes"].get("chapter")
@@ -681,7 +676,6 @@ def _check_and_download_new_chapters(manga: dict):
                 ch_id = ch["id"]
                 create_job("mangadex", manga["title"], str(ch_num), ch_id)
                 logger.info(f"[auto-dl] Queued {manga['title']} ch.{ch_num}")
-        db.close()
 
 
 # ── Metadata ────────────────────────────────────────────────────────────
@@ -707,10 +701,9 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
     mark_manga_processing(manga_id, True)
     try:
         logger.info(f"[metadata] Fetching for '{manga_title}' ({manga_id})")
-        db = get_db()
-        manga_row = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
-        existing = dict(manga_row) if manga_row else {}
-        db.close()
+        with db_conn() as db:
+            manga_row = db.execute("SELECT * FROM manga WHERE id=?", (manga_id,)).fetchone()
+            existing = dict(manga_row) if manga_row else {}
 
         async def _fetch():
             query = """
@@ -745,77 +738,58 @@ def auto_fetch_metadata(manga_id: str, manga_path: str, manga_title: str):
             authors = [e["node"]["name"]["full"] for e in best.get("staff", {}).get("edges", []) if e.get("role") and ("Story" in e["role"] or "Art" in e["role"])]
             cover_url = best.get("coverImage", {}).get("large") or best.get("coverImage", {}).get("medium")
             cached_cover = await download_and_cache_cover(cover_url, f"{manga_id}_cover")
-            db = get_db()
-            db.execute(
-                "UPDATE manga SET title=?, slug=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, cover=?, updated_at=? WHERE id=?",
-                (
-                    title, slugify(title),
-                    authors[0] if authors else existing.get("author"),
-                    authors[1] if len(authors) > 1 else existing.get("artist"),
-                    ", ".join(best.get("genres", [])) or existing.get("genre"),
-                    (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
-                    best.get("status", "").upper() if best.get("status") else existing.get("status"),
-                    best.get("chapters") or existing.get("total_chapters", 0),
-                    cached_cover, datetime.now().isoformat(), manga_id
+            with db_conn() as db:
+                db.execute(
+                    "UPDATE manga SET title=?, slug=?, author=?, artist=?, genre=?, summary=?, status=?, total_chapters=?, cover=?, updated_at=? WHERE id=?",
+                    (
+                        title, slugify(title),
+                        authors[0] if authors else existing.get("author"),
+                        authors[1] if len(authors) > 1 else existing.get("artist"),
+                        ", ".join(best.get("genres", [])) or existing.get("genre"),
+                        (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                        best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                        best.get("chapters") or existing.get("total_chapters", 0),
+                        cached_cover, datetime.now().isoformat(), manga_id
+                    )
                 )
-            )
-            db.commit()
-            p = Path(manga_path)
-            if p.is_dir():
-                existing_nfo = read_nfo(p)
-                nfo_data = {
-                    "Title": title,
-                    "Author": authors[0] if authors else existing.get("author"),
-                    "Artist": authors[1] if len(authors) > 1 else existing.get("artist"),
-                    "Genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
-                    "Summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
-                    "Status": best.get("status", "").upper() if best.get("status") else existing.get("status"),
-                    "TotalChapters": best.get("chapters") or existing.get("total_chapters", 0),
-                    "Cover": cached_cover,
-                    "Source": "anilist",
-                    "SourceId": str(best["id"])
-                }
-                for k, v in nfo_data.items():
-                    if v is not None and v != "" and v != 0:
-                        existing_nfo[k] = v
-                write_nfo(p, existing_nfo)
-                logger.info(f"[metadata] Wrote NFO for '{title}' at {p}")
+                db.commit()
+                p = Path(manga_path)
+                if p.is_dir():
+                    existing_nfo = read_nfo(p)
+                    nfo_data = {
+                        "Title": title,
+                        "Author": authors[0] if authors else existing.get("author"),
+                        "Artist": authors[1] if len(authors) > 1 else existing.get("artist"),
+                        "Genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
+                        "Summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                        "Status": best.get("status", "").upper() if best.get("status") else existing.get("status"),
+                        "TotalChapters": best.get("chapters") or existing.get("total_chapters", 0),
+                        "Cover": cached_cover,
+                        "Source": "anilist",
+                        "SourceId": str(best["id"])
+                    }
+                    for k, v in nfo_data.items():
+                        if v is not None and v != "" and v != 0:
+                            existing_nfo[k] = v
+                    write_nfo(p, existing_nfo)
+                    logger.info(f"[metadata] Wrote NFO for '{title}' at {p}")
 
                 ch_rows = db.execute("SELECT path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
-                for ch_row in ch_rows:
-                    ch_path = Path(ch_row["path"])
-                    if ch_path.suffix.lower() in (".cbz", ".zip"):
-                        ch_meta = {
-                            "series": title,
-                            "author": authors[0] if authors else existing.get("author"),
-                            "artist": authors[1] if len(authors) > 1 else existing.get("artist"),
-                            "genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
-                            "summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
-                            "year": best.get("startDate", {}).get("year") or existing.get("year"),
-                            "publisher": existing.get("publisher"),
-                            "total_chapters": best.get("chapters") or existing.get("total_chapters", 0),
-                            "source_url": f"https://anilist.co/manga/{best['id']}",
-                        }
-                        write_comicinfo_to_cbz(ch_path, ch_meta)
-            else:
-                ch_rows = db.execute("SELECT path FROM chapters WHERE manga_id=?", (manga_id,)).fetchall()
-                for ch_row in ch_rows:
-                    ch_path = Path(ch_row["path"])
-                    if ch_path.suffix.lower() in (".cbz", ".zip"):
-                        ch_meta = {
-                            "series": title,
-                            "author": authors[0] if authors else existing.get("author"),
-                            "artist": authors[1] if len(authors) > 1 else existing.get("artist"),
-                            "genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
-                            "summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
-                            "year": best.get("startDate", {}).get("year") or existing.get("year"),
-                            "publisher": existing.get("publisher"),
-                            "total_chapters": best.get("chapters") or existing.get("total_chapters", 0),
-                            "source_url": f"https://anilist.co/manga/{best['id']}",
-                        }
-                        write_comicinfo_to_cbz(ch_path, ch_meta)
-                logger.info(f"[metadata] Skipped NFO write (not a directory): {manga_path}")
-            db.close()
+            for ch_row in ch_rows:
+                ch_path = Path(ch_row["path"])
+                if ch_path.suffix.lower() in (".cbz", ".zip"):
+                    ch_meta = {
+                        "series": title,
+                        "author": authors[0] if authors else existing.get("author"),
+                        "artist": authors[1] if len(authors) > 1 else existing.get("artist"),
+                        "genre": ", ".join(best.get("genres", [])) or existing.get("genre"),
+                        "summary": (best.get("description") or "")[:2000] if best.get("description") else existing.get("summary"),
+                        "year": best.get("startDate", {}).get("year") or existing.get("year"),
+                        "publisher": existing.get("publisher"),
+                        "total_chapters": best.get("chapters") or existing.get("total_chapters", 0),
+                        "source_url": f"https://anilist.co/manga/{best['id']}",
+                    }
+                    write_comicinfo_to_cbz(ch_path, ch_meta)
             logger.info(f"[metadata] Updated DB for '{title}' ({manga_id})")
 
         asyncio.run(_fetch())
@@ -895,11 +869,10 @@ async def search_myanimelist(q: str, limit: int = 20) -> list:
 
 # ── Downloads ───────────────────────────────────────────────────────────
 
-download_status = {}
-
 async def download_mangadex_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
     try:
-        download_status[job_id] = {"status": "downloading", "progress": 0, "error": None}
+        from .job_queue import update_job
+        update_job(job_id, status="running", progress=0)
         async with aiohttp.ClientSession() as session:
             url = f"https://api.mangadex.org/at-home/server/{chapter_id}"
             async with session.get(url) as resp:
@@ -915,325 +888,17 @@ async def download_mangadex_chapter(chapter_id: str, manga_title: str, chapter_n
                 img_url = f"{base}/data/{hash_}/{page}"
                 async with session.get(img_url) as r:
                     imgs.append((page, await r.read()))
-                download_status[job_id]["progress"] = int((i+1)/len(pages)*100)
+                update_job(job_id, progress=int((i+1)/len(pages)*100))
             with zipfile.ZipFile(cbz_path, 'w') as z:
                 for name, data_ in imgs:
                     z.writestr(name, data_)
-        download_status[job_id] = {"status": "complete", "progress": 100, "error": None}
+        update_job(job_id, status="completed", progress=100)
         scan_manga_dir()
     except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def _download_image_list(img_urls: list, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        download_status[job_id] = {"status": "downloading", "progress": 0, "error": None}
-        out_dir = MANGA_DIR / manga_title
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ch_float = float(chapter_num) if chapter_num else 1.0
-        cbz_path = out_dir / f"Chapter_{ch_float:06.1f}.cbz"
-        imgs = []
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            for i, url in enumerate(img_urls):
-                async with s.get(url) as r:
-                    name = url.rsplit("/", 1)[-1].split("?")[0] or f"page_{i:04d}.jpg"
-                    imgs.append((name, await r.read()))
-                download_status[job_id]["progress"] = int((i + 1) / len(img_urls) * 100)
-        with zipfile.ZipFile(cbz_path, "w") as z:
-            for name, data_ in imgs:
-                z.writestr(name, data_)
-        download_status[job_id] = {"status": "complete", "progress": 100, "error": None}
-        scan_manga_dir()
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def search_mangasee(q: str, limit: int = 20) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post("https://mangasee123.com/_search.php",
-                              json={"search": q},
-                              headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}) as resp:
-                data = await resp.json()
-        results = []
-        for m in data[:limit]:
-            slug = m.get("i", "")
-            title = m.get("s", "")
-            cover = f"https://temp.compsci88.com/cover/{slug}.jpg" if slug else ""
-            results.append({"id": slug, "title": title, "cover": cover,
-                            "status": None, "source": "mangasee", "description": ""})
-        return results
-    except Exception as e:
-        logger.debug(f"[mangasee] Search failed: {e}")
-        return []
-
-async def search_batoto(q: str, limit: int = 20) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://battwo.com/search?word={q}",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for item in soup.select(".search-result-item")[:limit]:
-            link = item.select_one("a")
-            img = item.select_one("img")
-            if link:
-                title = link.get("title", "") or link.text.strip()
-                href = link.get("href", "")
-                cover = img.get("src", "") if img else ""
-                results.append({"id": href, "title": title, "cover": cover,
-                                "status": None, "source": "batoto", "description": ""})
-        return results
-    except Exception as e:
-        logger.debug(f"[batoto] Search failed: {e}")
-        return []
-
-async def search_asurascans(q: str, limit: int = 20) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://www.asurascans.com/?s={q}",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for item in soup.select("div.bsx")[:limit]:
-            link = item.select_one("a")
-            img = item.select_one("img")
-            if link:
-                title = link.get("title", "") or link.text.strip()
-                href = link.get("href", "")
-                cover = img.get("src", "") if img else ""
-                results.append({"id": href, "title": title, "cover": cover,
-                                "status": None, "source": "asurascans", "description": ""})
-        return results
-    except Exception as e:
-        logger.debug(f"[asurascans] Search failed: {e}")
-        return []
-
-async def search_comick(q: str, limit: int = 20) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://api.comick.io/search?q={q}&limit={limit}",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                data = await resp.json()
-        results = []
-        for m in data:
-            slug = m.get("slug", "")
-            title = m.get("title", "")
-            cover = f"https://meo.comick.pics/{m.get('md_covers', [{}])[0].get('b2key', '')}" if m.get("md_covers") else ""
-            results.append({"id": slug, "title": title, "cover": cover,
-                            "status": None, "source": "comick", "description": m.get("desc", "")[:200]})
-        return results
-    except Exception as e:
-        logger.debug(f"[comick] Search failed: {e}")
-        return []
-
-async def search_flamescans(q: str, limit: int = 20) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://flamescans.org/?s={q}",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        results = []
-        for item in soup.select("div.bs")[:limit]:
-            link = item.select_one("a")
-            img = item.select_one("img")
-            if link:
-                title = link.get("title", "") or link.text.strip()
-                href = link.get("href", "")
-                cover = img.get("src", "") if img else ""
-                results.append({"id": href, "title": title, "cover": cover,
-                                "status": None, "source": "flamescans", "description": ""})
-        return results
-    except Exception as e:
-        logger.debug(f"[flamescans] Search failed: {e}")
-        return []
-
-async def get_mangasee_chapters(slug: str) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://mangasee123.com/manga/{slug}",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for opt in soup.select("select#chapterSelect option"):
-            val = opt.get("value", "")
-            txt = opt.text.strip()
-            import re
-            m = re.search(r"Ch\.([\d.]+)", txt)
-            ch_num = m.group(1) if m else txt
-            chapters.append({"id": f"{slug}/{val}", "chapter": ch_num, "title": txt, "pages": 0, "source": "mangasee"})
-        return chapters
-    except Exception as e:
-        logger.debug(f"[mangasee] Chapters failed: {e}")
-        return []
-
-async def get_batoto_chapters(url: str) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for row in soup.select(".chapter-list a") or soup.select("a.chapter-item"):
-            href = row.get("href", "")
-            txt = row.text.strip() or row.select_one("span") and row.select_one("span").text.strip() or ""
-            import re
-            m = re.search(r"([\d.]+)", txt)
-            ch_num = m.group(1) if m else txt
-            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "batoto"})
-        return chapters
-    except Exception as e:
-        logger.debug(f"[batoto] Chapters failed: {e}")
-        return []
-
-async def get_asurascans_chapters(url: str) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for item in soup.select("li.wp-manga-chapter a") or soup.select(".chapter-list a"):
-            href = item.get("href", "")
-            txt = item.text.strip()
-            import re
-            m = re.search(r"Chapter\s*([\d.]+)", txt, re.I)
-            ch_num = m.group(1) if m else txt
-            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "asurascans"})
-        return chapters
-    except Exception as e:
-        logger.debug(f"[asurascans] Chapters failed: {e}")
-        return []
-
-async def get_comick_chapters(slug: str) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://api.comick.io/comic/{slug}/chapter?limit=500",
-                             headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                data = await resp.json()
-        chapters = []
-        for ch in data.get("chapters", []):
-            ch_num = ch.get("chap", "")
-            hid = ch.get("hid", "")
-            title = ch.get("title", "") or f"Chapter {ch_num}"
-            chapters.append({"id": hid, "chapter": ch_num, "title": title, "pages": ch.get("page_count", 0), "source": "comick"})
-        return chapters
-    except Exception as e:
-        logger.debug(f"[comick] Chapters failed: {e}")
-        return []
-
-async def get_flamescans_chapters(url: str) -> list:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        chapters = []
-        for item in soup.select("li.wp-manga-chapter a") or soup.select(".chapter-list a"):
-            href = item.get("href", "")
-            txt = item.text.strip()
-            import re
-            m = re.search(r"Chapter\s*([\d.]+)", txt, re.I)
-            ch_num = m.group(1) if m else txt
-            chapters.append({"id": href, "chapter": ch_num, "title": txt, "pages": 0, "source": "flamescans"})
-        return chapters
-    except Exception as e:
-        logger.debug(f"[flamescans] Chapters failed: {e}")
-        return []
+        from .job_queue import update_job
+        update_job(job_id, status="failed", error=str(e))
 
 # ── Source Downloaders ────────────────────────────────────────────────
-
-async def download_mangasee_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        slug = chapter_id.split("/")[0]
-        ch_part = chapter_id.split("/")[1] if "/" in chapter_id else chapter_num
-        url = f"https://mangasee123.com/read-online/{slug}-chapter-{ch_part}.html"
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            async with s.get(url) as resp:
-                html = await resp.text()
-        import json, re
-        m = re.search(r"vm\.CurChapter\s*=\s*({.*?});", html, re.DOTALL)
-        if not m:
-            raise Exception("Could not find chapter data")
-        ch_data = json.loads(m.group(1))
-        pages = ch_data.get("Pages", [])
-        host = "https://temp.compsci88.com"
-        img_urls = [f"{host}/manga/{slug}/{ch_part}-{str(p).zfill(3)}.png" for p in range(1, len(pages) + 1)]
-        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def download_batoto_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            async with s.get(chapter_id) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        img_urls = []
-        for img in soup.select("img.img-fluid") or soup.select("img.page-img") or soup.select("#page img"):
-            src = img.get("src") or img.get("data-src", "")
-            if src and src.startswith("http"):
-                img_urls.append(src)
-        if not img_urls:
-            import json, re
-            m = re.search(r"pages\s*=\s*(\[.*?\]);", html, re.DOTALL)
-            if m:
-                for p in json.loads(m.group(1)):
-                    if isinstance(p, str) and p.startswith("http"):
-                        img_urls.append(p)
-        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def download_asurascans_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            async with s.get(chapter_id) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        img_urls = []
-        for img in soup.select(".reading-content img") or soup.select("img.wp-manga-chapter-img"):
-            src = img.get("src") or img.get("data-src", "") or img.get("data-lazy-src", "")
-            if src.startswith("http"):
-                img_urls.append(src)
-        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def download_comick_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            async with s.get(f"https://api.comick.io/chapter/{chapter_id}") as resp:
-                data = await resp.json()
-        pages = data.get("chapter", {}).get("images", []) or data.get("images", []) or data.get("page_urls", [])
-        img_urls = []
-        for p in pages:
-            if isinstance(p, str):
-                img_urls.append(f"https://meo.comick.pics/{p}" if not p.startswith("http") else p)
-            elif isinstance(p, dict):
-                url = p.get("url", p.get("src", ""))
-                if url:
-                    img_urls.append(f"https://meo.comick.pics/{url}" if not url.startswith("http") else url)
-        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
-
-async def download_flamescans_chapter(chapter_id: str, manga_title: str, chapter_num: str, job_id: str):
-    try:
-        async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as s:
-            async with s.get(chapter_id) as resp:
-                html = await resp.text()
-        soup = BeautifulSoup(html, "html.parser")
-        img_urls = []
-        for img in soup.select(".reading-content img") or soup.select("img.wp-manga-chapter-img"):
-            src = img.get("src") or img.get("data-src", "") or img.get("data-lazy-src", "")
-            if src.startswith("http"):
-                img_urls.append(src)
-        await _download_image_list(img_urls, manga_title, chapter_num, job_id)
-    except Exception as e:
-        download_status[job_id] = {"status": "error", "progress": 0, "error": str(e)}
 
 # ── Job Queue Dispatcher ──────────────────────────────────────────────
 

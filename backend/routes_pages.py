@@ -1,36 +1,23 @@
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from datetime import datetime
 
-from .db import get_db, is_first_launch
+from .auth import require_auth, require_admin
+from .config import TEMPLATES_DIR
+from .db import db_conn, is_first_launch
 from .session import verify_session, create_session, delete_session
 from .utils import hash_password, verify_password, check_login_rate_limit, generate_id
 
 router = APIRouter()
-templates = Jinja2Templates(directory="/app/frontend/templates")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 async def get_current_user(request: Request):
     token = request.cookies.get("session")
     if not token:
         return None
     return verify_session(token)
-
-def require_auth(request: Request):
-    token = request.cookies.get("session")
-    if not token:
-        raise HTTPException(401, "Not authenticated")
-    user = verify_session(token)
-    if not user:
-        raise HTTPException(401, "Invalid session")
-    return user
-
-def require_admin(request: Request):
-    user = require_auth(request)
-    if user["role"] != "admin":
-        raise HTTPException(403, "Admin access required")
-    return user
 
 @router.get("/")
 async def index(request: Request):
@@ -85,19 +72,18 @@ async def setup_post(request: Request):
         return templates.TemplateResponse("setup.html", {"request": request, "error": "Password must be at least 6 characters."})
     if password != confirm:
         return templates.TemplateResponse("setup.html", {"request": request, "error": "Passwords do not match."})
-    db = get_db()
-    db.execute(
-        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-        (generate_id(), username, hash_password(password), "admin", datetime.now().isoformat())
-    )
-    db.commit()
-    user_row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-    db.execute(
-        "INSERT OR IGNORE INTO user_settings (user_id, reading_mode, strip_scroll_sensitivity, auto_hide_toolbar, show_page_numbers) VALUES (?, ?, ?, ?, ?)",
-        (user_row["id"], "single", 1.0, 1, 1)
-    )
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute(
+            "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (generate_id(), username, hash_password(password), "admin", datetime.now().isoformat())
+        )
+        db.commit()
+        user_row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        db.execute(
+            "INSERT OR IGNORE INTO user_settings (user_id, reading_mode, strip_scroll_sensitivity, auto_hide_toolbar, show_page_numbers) VALUES (?, ?, ?, ?, ?)",
+            (user_row["id"], "single", 1.0, 1, 1)
+        )
+        db.commit()
     session_id = create_session(user_row["id"], user_row["username"], user_row["role"], user_row["display_name"], user_row["avatar"])
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(key="session", value=session_id, httponly=True, max_age=86400 * 7, samesite="lax")
@@ -119,9 +105,8 @@ async def login_post(request: Request):
     form = await request.form()
     username = form.get("username", "").strip()
     password = form.get("password", "")
-    db = get_db()
-    user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-    db.close()
+    with db_conn() as db:
+        user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
     if not user or not verify_password(password, user["password_hash"]):
         return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password."})
     session_id = create_session(user["id"], user["username"], user["role"], user["display_name"], user["avatar"])
@@ -200,19 +185,16 @@ async def downloads_page(request: Request):
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 def _resolve_manga(identifier: str):
-    db = get_db()
-    row = db.execute("SELECT id FROM manga WHERE id=? OR slug=?", (identifier, identifier)).fetchone()
-    db.close()
-    return row["id"] if row else None
+    with db_conn() as db:
+        row = db.execute("SELECT id FROM manga WHERE id=? OR slug=?", (identifier, identifier)).fetchone()
+        return row["id"] if row else None
 
 def _resolve_chapter(manga_id: str, identifier: str):
-    db = get_db()
-    row = db.execute("SELECT id FROM chapters WHERE (id=? OR (manga_id=? AND slug=?))", (identifier, manga_id, identifier)).fetchone()
-    db.close()
-    return row["id"] if row else None
+    with db_conn() as db:
+        row = db.execute("SELECT id FROM chapters WHERE (id=? OR (manga_id=? AND slug=?))", (identifier, manga_id, identifier)).fetchone()
+        return row["id"] if row else None
 
 def _get_manga_slug(manga_id: str) -> str:
-    db = get_db()
-    row = db.execute("SELECT slug FROM manga WHERE id=?", (manga_id,)).fetchone()
-    db.close()
-    return row["slug"] if row and row["slug"] else manga_id
+    with db_conn() as db:
+        row = db.execute("SELECT slug FROM manga WHERE id=?", (manga_id,)).fetchone()
+        return row["slug"] if row and row["slug"] else manga_id

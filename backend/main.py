@@ -3,15 +3,14 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pathlib import Path
 
-from .config import MANGA_DIR
+from .config import MANGA_DIR, STATIC_DIR, AVATAR_DIR, TEMPLATES_DIR
 from .db import init_db, migrate_db, init_default_directory
 from .routes_pages import router as pages_router
 from .routes_api import router as api_router
 from .services import start_folder_watcher, start_interval_scanner, start_followed_updates_checker, start_auto_downloader
 from .job_queue import start_worker
+from .session import start_session_cleanup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,10 +27,10 @@ migrate_db()
 init_default_directory()
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="/app/frontend/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/manga-files", StaticFiles(directory=str(MANGA_DIR)), name="manga-files")
-Path("/data/avatars").mkdir(parents=True, exist_ok=True)
-app.mount("/avatars", StaticFiles(directory="/data/avatars"), name="avatars")
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(AVATAR_DIR)), name="avatars")
 
 # Include routers
 app.include_router(pages_router)
@@ -43,5 +42,6 @@ start_interval_scanner()
 start_followed_updates_checker()
 start_auto_downloader()
 start_worker()
+start_session_cleanup()
 
 logger.info("MangaShelf started")

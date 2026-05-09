@@ -1,5 +1,6 @@
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,14 @@ def get_db():
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+@contextmanager
+def db_conn():
+    conn = get_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -215,31 +224,26 @@ def init_default_directory():
             db.commit()
 
 def is_first_launch():
-    db = get_db()
-    count = db.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
-    db.close()
-    return count["cnt"] == 0
+    with db_conn() as db:
+        count = db.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+        return count["cnt"] == 0
 
 def get_scan_setting(key: str) -> str:
-    db = get_db()
-    row = db.execute("SELECT value FROM scan_settings WHERE key=?", (key,)).fetchone()
-    db.close()
-    return row["value"] if row else ""
+    with db_conn() as db:
+        row = db.execute("SELECT value FROM scan_settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else ""
 
 def set_scan_setting(key: str, value: str):
-    db = get_db()
-    db.execute("INSERT OR REPLACE INTO scan_settings (key, value) VALUES (?, ?)", (key, value))
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute("INSERT OR REPLACE INTO scan_settings (key, value) VALUES (?, ?)", (key, value))
+        db.commit()
 
 def get_manga_directories():
-    db = get_db()
-    rows = db.execute("SELECT * FROM manga_directories WHERE enabled=1 ORDER BY added_at").fetchall()
-    db.close()
-    return [dict(r) for r in rows]
+    with db_conn() as db:
+        rows = db.execute("SELECT * FROM manga_directories WHERE enabled=1 ORDER BY added_at").fetchall()
+        return [dict(r) for r in rows]
 
 def get_all_manga_directories():
-    db = get_db()
-    rows = db.execute("SELECT * FROM manga_directories ORDER BY added_at").fetchall()
-    db.close()
-    return [dict(r) for r in rows]
+    with db_conn() as db:
+        rows = db.execute("SELECT * FROM manga_directories ORDER BY added_at").fetchall()
+        return [dict(r) for r in rows]

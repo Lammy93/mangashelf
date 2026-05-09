@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import MANGA_DIR
-from .db import get_db
+from .db import get_db, db_conn
 from .utils import logger
 
 MAX_CONCURRENT = 3
@@ -16,97 +16,87 @@ _worker_started = False
 _job_event = threading.Event()
 
 def ensure_tables():
-    db = get_db()
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS download_jobs (
-            id TEXT PRIMARY KEY,
-            source TEXT NOT NULL,
-            manga_title TEXT NOT NULL,
-            chapter_number TEXT,
-            chapter_id TEXT,
-            status TEXT DEFAULT 'queued',
-            progress INTEGER DEFAULT 0,
-            error TEXT,
-            priority INTEGER DEFAULT 0,
-            output_format TEXT DEFAULT 'cbz',
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            completed_at TEXT
-        )
-    """)
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS download_jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                manga_title TEXT NOT NULL,
+                chapter_number TEXT,
+                chapter_id TEXT,
+                status TEXT DEFAULT 'queued',
+                progress INTEGER DEFAULT 0,
+                error TEXT,
+                priority INTEGER DEFAULT 0,
+                output_format TEXT DEFAULT 'cbz',
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            )
+        """)
+        db.commit()
 
 ensure_tables()
 
 def create_job(source: str, manga_title: str, chapter_number: str, chapter_id: str, output_format: str = "cbz") -> str:
     job_id = str(uuid.uuid4())
-    db = get_db()
-    db.execute(
-        "INSERT INTO download_jobs (id, source, manga_title, chapter_number, chapter_id, output_format, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-        (job_id, source, manga_title, chapter_number, chapter_id, output_format, 'queued', datetime.now().isoformat())
-    )
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute(
+            "INSERT INTO download_jobs (id, source, manga_title, chapter_number, chapter_id, output_format, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (job_id, source, manga_title, chapter_number, chapter_id, output_format, 'queued', datetime.now().isoformat())
+        )
+        db.commit()
     _job_event.set()
     return job_id
 
 def get_job(job_id: str) -> dict:
-    db = get_db()
-    row = db.execute("SELECT * FROM download_jobs WHERE id=?", (job_id,)).fetchone()
-    db.close()
-    return dict(row) if row else {"status": "unknown"}
+    with db_conn() as db:
+        row = db.execute("SELECT * FROM download_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row) if row else {"status": "unknown"}
 
 def list_jobs(limit: int = 50) -> list:
-    db = get_db()
-    rows = db.execute("SELECT * FROM download_jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
-    db.close()
-    return [dict(r) for r in rows]
+    with db_conn() as db:
+        rows = db.execute("SELECT * FROM download_jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 def cancel_job(job_id: str):
-    db = get_db()
-    db.execute("UPDATE download_jobs SET status='cancelled' WHERE id=? AND status IN ('queued','running')", (job_id,))
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute("UPDATE download_jobs SET status='cancelled' WHERE id=? AND status IN ('queued','running')", (job_id,))
+        db.commit()
 
 def retry_job(job_id: str):
-    db = get_db()
-    db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE id=? AND status IN ('failed','cancelled')", (job_id,))
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE id=? AND status IN ('failed','cancelled')", (job_id,))
+        db.commit()
 
 def retry_all_failed():
-    db = get_db()
-    db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE status='failed'")
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute("UPDATE download_jobs SET status='queued', progress=0, error=NULL WHERE status='failed'")
+        db.commit()
 
 def clear_completed(older_than_hours: int = 0):
-    db = get_db()
-    if older_than_hours > 0:
-        from datetime import datetime, timedelta
-        cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat()
-        db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled') AND completed_at < ?", (cutoff,))
-    else:
-        db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled')")
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        if older_than_hours > 0:
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(hours=older_than_hours)).isoformat()
+            db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled') AND completed_at < ?", (cutoff,))
+        else:
+            db.execute("DELETE FROM download_jobs WHERE status IN ('completed','cancelled')")
+        db.commit()
 
 def update_job(job_id: str, **kwargs):
     sets = ", ".join(f"{k}=?" for k in kwargs)
     vals = list(kwargs.values()) + [job_id]
-    db = get_db()
-    db.execute(f"UPDATE download_jobs SET {sets} WHERE id=?", vals)
-    db.commit()
-    db.close()
+    with db_conn() as db:
+        db.execute(f"UPDATE download_jobs SET {sets} WHERE id=?", vals)
+        db.commit()
 
 def _next_queued_job():
-    db = get_db()
-    row = db.execute(
-        "SELECT * FROM download_jobs WHERE status='queued' ORDER BY priority DESC, created_at ASC LIMIT 1"
-    ).fetchone()
-    db.close()
-    return dict(row) if row else None
+    with db_conn() as db:
+        row = db.execute(
+            "SELECT * FROM download_jobs WHERE status='queued' ORDER BY priority DESC, created_at ASC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
 
 def _worker_loop():
     while True:

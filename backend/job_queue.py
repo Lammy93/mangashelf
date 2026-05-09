@@ -13,6 +13,7 @@ MAX_CONCURRENT = 3
 _running_jobs = set()
 _running_lock = threading.Lock()
 _worker_started = False
+_job_event = threading.Event()
 
 def ensure_tables():
     db = get_db()
@@ -47,6 +48,7 @@ def create_job(source: str, manga_title: str, chapter_number: str, chapter_id: s
     )
     db.commit()
     db.close()
+    _job_event.set()
     return job_id
 
 def get_job(job_id: str) -> dict:
@@ -109,13 +111,13 @@ def _next_queued_job():
 def _worker_loop():
     while True:
         try:
+            _job_event.wait()
+            _job_event.clear()
             with _running_lock:
                 if len(_running_jobs) >= MAX_CONCURRENT:
-                    time.sleep(1)
                     continue
             job = _next_queued_job()
             if not job:
-                time.sleep(1)
                 continue
             with _running_lock:
                 _running_jobs.add(job["id"])

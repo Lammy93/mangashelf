@@ -3,11 +3,14 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .config import DB_PATH
+from .config import DB_PATH, MANGA_DIR
 
 def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 def init_db():
@@ -160,61 +163,56 @@ def slugify(text: str) -> str:
     return s[:80]
 
 def migrate_db():
-    db = get_db()
-    def add_col(table, col, type_def, default=None):
-        cols = [row["name"] for row in db.execute(f"PRAGMA table_info({table})")]
-        if col not in cols:
-            clause = f"{col} {type_def}"
-            if default is not None:
-                clause += f" DEFAULT {default}"
-            db.execute(f"ALTER TABLE {table} ADD COLUMN {clause}")
-    add_col("manga", "total_chapters", "INTEGER", "0")
-    add_col("manga", "status", "TEXT", "'local'")
-    add_col("manga", "author", "TEXT", "NULL")
-    add_col("manga", "artist", "TEXT", "NULL")
-    add_col("manga", "genre", "TEXT", "NULL")
-    add_col("manga", "summary", "TEXT", "NULL")
-    add_col("manga", "publisher", "TEXT", "NULL")
-    add_col("manga", "year", "INTEGER", "NULL")
-    add_col("manga", "source", "TEXT", "NULL")
-    add_col("manga", "source_id", "TEXT", "NULL")
-    add_col("manga", "cover", "TEXT", "NULL")
-    add_col("users", "avatar", "TEXT", "NULL")
-    add_col("users", "display_name", "TEXT", "NULL")
-    add_col("chapters", "volume_id", "TEXT", "NULL")
-    add_col("chapters", "slug", "TEXT", "NULL")
-    add_col("manga", "slug", "TEXT", "NULL")
-    add_col("manga", "auto_download", "INTEGER", "0")
-    # output_format column for download_jobs
-    cols = [row["name"] for row in db.execute("PRAGMA table_info(download_jobs)") if row["name"] != "output_format"]
-    if "output_format" not in cols:
-        try:
-            db.execute("ALTER TABLE download_jobs ADD COLUMN output_format TEXT DEFAULT 'cbz'")
-        except Exception:
-            pass
-    # Disable dead sources for existing installs
-    dead = ('mangasee','mangakakalot','batoto','asurascans','comick','flamescans')
-    for src in dead:
-        db.execute("UPDATE sources SET enabled=0 WHERE id=?", (src,))
-    # Ensure mangafox is enabled
-    db.execute("UPDATE sources SET enabled=1 WHERE id='mangafox'")
-    for row in db.execute("SELECT id, title FROM manga WHERE slug IS NULL AND title IS NOT NULL"):
-        db.execute("UPDATE manga SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
-    for row in db.execute("SELECT id, title FROM chapters WHERE slug IS NULL AND title IS NOT NULL"):
-        db.execute("UPDATE chapters SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
-    db.commit()
-    db.close()
+    with get_db() as db:
+        def add_col(table, col, type_def, default=None):
+            cols = [row["name"] for row in db.execute(f"PRAGMA table_info({table})")]
+            if col not in cols:
+                clause = f"{col} {type_def}"
+                if default is not None:
+                    clause += f" DEFAULT {default}"
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {clause}")
+        add_col("manga", "total_chapters", "INTEGER", "0")
+        add_col("manga", "status", "TEXT", "'local'")
+        add_col("manga", "author", "TEXT", "NULL")
+        add_col("manga", "artist", "TEXT", "NULL")
+        add_col("manga", "genre", "TEXT", "NULL")
+        add_col("manga", "summary", "TEXT", "NULL")
+        add_col("manga", "publisher", "TEXT", "NULL")
+        add_col("manga", "year", "INTEGER", "NULL")
+        add_col("manga", "source", "TEXT", "NULL")
+        add_col("manga", "source_id", "TEXT", "NULL")
+        add_col("manga", "cover", "TEXT", "NULL")
+        add_col("users", "avatar", "TEXT", "NULL")
+        add_col("users", "display_name", "TEXT", "NULL")
+        add_col("chapters", "volume_id", "TEXT", "NULL")
+        add_col("chapters", "slug", "TEXT", "NULL")
+        add_col("manga", "slug", "TEXT", "NULL")
+        add_col("manga", "auto_download", "INTEGER", "0")
+        cols = [row["name"] for row in db.execute("PRAGMA table_info(download_jobs)") if row["name"] != "output_format"]
+        if "output_format" not in cols:
+            try:
+                db.execute("ALTER TABLE download_jobs ADD COLUMN output_format TEXT DEFAULT 'cbz'")
+            except Exception:
+                pass
+        dead = ('mangasee','mangakakalot','batoto','asurascans','comick','flamescans')
+        for src in dead:
+            db.execute("UPDATE sources SET enabled=0 WHERE id=?", (src,))
+        db.execute("UPDATE sources SET enabled=1 WHERE id='mangafox'")
+        for row in db.execute("SELECT id, title FROM manga WHERE slug IS NULL AND title IS NOT NULL"):
+            db.execute("UPDATE manga SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
+        for row in db.execute("SELECT id, title FROM chapters WHERE slug IS NULL AND title IS NOT NULL"):
+            db.execute("UPDATE chapters SET slug=? WHERE id=?", (slugify(row["title"]), row["id"]))
+        db.commit()
 
 def init_default_directory():
-    db = get_db()
-    count = db.execute("SELECT COUNT(*) as cnt FROM manga_directories").fetchone()
-    if count["cnt"] == 0:
-        db.execute(
-            "INSERT INTO manga_directories (id, path, enabled, added_at) VALUES (?, ?, ?, ?)",
-            (str(uuid.uuid4()), "/manga", 1, datetime.now().isoformat())
-        )
-        db.commit()
-    db.close()
+    with get_db() as db:
+        count = db.execute("SELECT COUNT(*) as cnt FROM manga_directories").fetchone()
+        if count["cnt"] == 0:
+            db.execute(
+                "INSERT INTO manga_directories (id, path, enabled, added_at) VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), str(MANGA_DIR), 1, datetime.now().isoformat())
+            )
+            db.commit()
 
 def is_first_launch():
     db = get_db()

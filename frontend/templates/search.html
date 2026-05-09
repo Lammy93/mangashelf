@@ -213,7 +213,7 @@ async function openManga(idx, sourceGroup) {
     window._currentChapters = chapters;
     document.getElementById('chapter-list').innerHTML = chapters.map(c=>`
       <div class="chapter-item" id="ch-${c.id}">
-        <div>
+        <div class="ch-item-meta">
           <div class="ch-name">Chapter ${c.chapter} ${c.title && c.title !== `Chapter ${c.chapter}` ? '— '+c.title : ''}</div>
           <div class="ch-pages">${c.pages ? c.pages+' pages' : ''}</div>
         </div>

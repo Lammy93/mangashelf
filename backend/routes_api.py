@@ -37,7 +37,7 @@ from .services import (
     get_mangasee_chapters, get_batoto_chapters, get_asurascans_chapters,
     get_comick_chapters, get_flamescans_chapters,
     auto_fetch_metadata, extract_metadata, pre_extract_pages,
-    _run_download_job, search_mangal_all
+    _run_download_job, search_mangal_all, trigger_interval_reset
 )
 from .job_queue import create_job, get_job, list_jobs, cancel_job, retry_job, retry_all_failed, clear_completed, start_worker
 
@@ -138,8 +138,10 @@ async def update_scan_settings(data: ScanSettingsUpdate, request: Request):
     require_admin(request)
     if data.scan_interval is not None:
         set_scan_setting("scan_interval", str(max(300, data.scan_interval)))
+        trigger_interval_reset()
     if data.auto_scan_enabled is not None:
         set_scan_setting("auto_scan_enabled", "1" if data.auto_scan_enabled else "0")
+        trigger_interval_reset()
     if data.watch_enabled is not None:
         set_scan_setting("watch_enabled", "1" if data.watch_enabled else "0")
         start_folder_watcher()
@@ -170,8 +172,8 @@ async def add_scan_directory(data: MangaDirAdd, request: Request):
     db.commit()
     db.close()
     start_folder_watcher()
-    scan_manga_dir()
-    return {"ok": True}
+    threading.Thread(target=scan_manga_dir, daemon=True).start()
+    return {"ok": True, "message": "Scan started in background"}
 
 @router.delete("/api/scan-directories/{dir_id}")
 async def delete_scan_directory(dir_id: str, request: Request):
@@ -191,8 +193,8 @@ async def toggle_scan_directory(dir_id: str, request: Request):
     db.commit()
     db.close()
     start_folder_watcher()
-    scan_manga_dir()
-    return {"ok": True}
+    threading.Thread(target=scan_manga_dir, daemon=True).start()
+    return {"ok": True, "message": "Scan started in background"}
 
 # ── Favorites ───────────────────────────────────────────────────────────
 

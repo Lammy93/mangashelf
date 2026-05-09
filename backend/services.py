@@ -213,9 +213,12 @@ def write_comicinfo_to_cbz(cbz_path: Path, meta: dict):
 # ── Library Scanner ─────────────────────────────────────────────────────
 
 def scan_manga_dir():
-    directories = get_manga_directories()
-    set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
+    if not _scan_lock.acquire(blocking=False):
+        logger.debug("[scan] Scan already running, skipping")
+        return
     try:
+        directories = get_manga_directories()
+        set_scan_progress(running=True, total=0, current=0, new_manga=[], message="Scanning...")
         db = get_db()
         now_iso = datetime.now().isoformat()
         all_files = []
@@ -233,7 +236,6 @@ def scan_manga_dir():
 
         set_scan_progress(total=len(all_files), message=f"Scanning {len(all_files)} files...")
 
-        # Group files by folder (preserving per-folder identity; standalone files use parsed series)
         series_map = {}
         for scan_path, folder, file_path in all_files:
             parsed = parse_filename(file_path.name, folder.name if folder else "")
@@ -255,13 +257,13 @@ def scan_manga_dir():
         new_manga_list = []
         new_manga_for_meta = []
         cover_tasks = []
+        updated_manga_ids = set()
 
         for group_key, series_data in series_map.items():
             folder = series_data["folder"]
             files = series_data["files"]
             parsed_series = series_data["parsed_series"]
 
-            # Determine manga root path for DB identity
             if folder and folder.is_dir():
                 manga_path = str(folder)
             else:
@@ -298,10 +300,10 @@ def scan_manga_dir():
                     new_manga_for_meta.append({"id": manga_id, "path": manga_path, "title": title})
                 new_manga_list.append({"id": manga_id, "path": manga_path, "title": title})
                 cover_tasks.append({"id": manga_id, "path": manga_path})
+                updated_manga_ids.add(manga_id)
             else:
                 title = existing_manga["title"]
 
-            # Process individual files
             for f in files:
                 file_path = f["path"]
                 parsed = f["parsed"]
@@ -352,13 +354,17 @@ def scan_manga_dir():
                         (ch_id, manga_id, ch_num, file_path.stem, str(file_path), 0, 0, 0, None, 1, volume_id, ch_slug),
                     )
 
-            # Update total chapter count for the series
-            ch_count = db.execute("SELECT COUNT(*) as cnt FROM chapters WHERE manga_id=?", (manga_id,)).fetchone()["cnt"]
-            db.execute("UPDATE manga SET total_chapters=?, updated_at=? WHERE id=?", (ch_count, now_iso, manga_id))
+                updated_manga_ids.add(manga_id)
 
             set_scan_progress(
                 current=len(new_manga_list),
                 message=f"Scanned {title} ({len(files)} files)",
+            )
+
+        for mid in updated_manga_ids:
+            db.execute(
+                "UPDATE manga SET total_chapters=(SELECT COUNT(*) FROM chapters WHERE manga_id=?), updated_at=? WHERE id=?",
+                (mid, now_iso, mid)
             )
 
         db.commit()
@@ -366,6 +372,10 @@ def scan_manga_dir():
 
         new_count = len(new_manga_list)
         set_scan_progress(message=f"Scan complete. Found {new_count} new series. Post-processing...")
+
+        # Invalidate NFO cache for affected manga
+        for mid in updated_manga_ids:
+            _metadata_cache.invalidate(mid)
 
         # Parallel cover generation
         if cover_tasks:
@@ -378,10 +388,8 @@ def scan_manga_dir():
                         if p.exists():
                             pages = extract_pages(p)
                             if pages:
-                                d2 = get_db()
-                                d2.execute("UPDATE manga SET cover=? WHERE id=?", (pages[0], mid))
-                                d2.commit()
-                                d2.close()
+                                d.execute("UPDATE manga SET cover=? WHERE id=?", (pages[0], mid))
+                                d.commit()
                     d.close()
                 except Exception as e:
                     logger.warning(f"[cover] Failed for {mid}: {e}")
@@ -389,11 +397,9 @@ def scan_manga_dir():
             with ThreadPoolExecutor(max_workers=4) as pool:
                 list(pool.map(_gen_cover, [ct["id"] for ct in cover_tasks]))
 
-        # Metadata fetch for new manga without NFO
         for nm in new_manga_for_meta:
             bg_submit(auto_fetch_metadata, nm["id"], nm["path"], nm["title"])
 
-        # Pre-extract pages for new manga
         for nm in new_manga_list:
             bg_submit(pre_extract_pages, nm["id"])
 
@@ -405,6 +411,7 @@ def scan_manga_dir():
         set_scan_progress(message=f"Scan failed: {e}")
     finally:
         set_scan_progress(running=False)
+        _scan_lock.release()
 
 
 def pre_extract_pages(manga_id: str):
@@ -429,6 +436,7 @@ def pre_extract_pages(manga_id: str):
 _scan_lock = threading.Lock()
 _scan_pending = False
 _last_scan = 0.0
+_debounce_timer = None
 _watcher = None
 
 def get_scan_cooldown():
@@ -436,13 +444,18 @@ def get_scan_cooldown():
     return max(5, interval / 2)
 
 def debounced_scan():
-    global _scan_pending, _last_scan
+    global _debounce_timer
     if get_scan_setting("scan_on_folder_change") != "1":
         return
-    now = time.time()
+    if _debounce_timer is not None:
+        _debounce_timer.cancel()
     cooldown = get_scan_cooldown()
-    if now - _last_scan < cooldown:
-        return
+    _debounce_timer = threading.Timer(cooldown, _do_debounced_scan)
+    _debounce_timer.daemon = True
+    _debounce_timer.start()
+
+def _do_debounced_scan():
+    global _scan_pending, _last_scan
     with _scan_lock:
         if not _scan_pending:
             _scan_pending = True
@@ -482,6 +495,7 @@ def start_folder_watcher():
     global _watcher
     if _watcher:
         _watcher.stop()
+        _watcher.join()
     if get_scan_setting("watch_enabled") != "1":
         return
     _watcher = Observer()
@@ -493,13 +507,20 @@ def start_folder_watcher():
     _watcher.daemon = True
     _watcher.start()
 
+_interval_event = threading.Event()
+
+def trigger_interval_reset():
+    _interval_event.set()
+
 def start_interval_scanner():
     if get_scan_setting("auto_scan_enabled") != "1":
         return
     def interval_loop():
         while True:
             interval = int(get_scan_setting("scan_interval") or 300)
-            time.sleep(interval)
+            if _interval_event.wait(timeout=interval):
+                _interval_event.clear()
+                continue
             if get_scan_setting("auto_scan_enabled") != "1":
                 break
             scan_manga_dir()
